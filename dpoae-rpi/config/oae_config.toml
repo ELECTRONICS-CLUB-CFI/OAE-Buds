@@ -1,0 +1,308 @@
+# ==============================================================================
+# OAE Buds — DPOAE Screening Configuration (TOML)
+# Compatible with Headless C++20 on Raspberry Pi 5
+# Audio interface: UGREEN 80864 USB External Sound Card (2-in-1 TRRS)
+# Transducers: Sony MDR-EX14AP drivers (L: f1, R: f2) + PUI Audio POM-2730L-HD-R
+# ==============================================================================
+
+[audio]
+sample_rate = 48000
+bit_depth = 16
+recording_window_seconds = 1.5
+play_window_ms = 1500
+process_window_length_factor = 1.0       # 1.0 * sample_rate = 48000 samples (1.0 s)
+init_signal_trim_factor = 1.0            # 1.0 * sample_rate = 48000 samples (1.0 s trimmed)
+
+[test]
+snr_threshold_db = 7.0                   # Standard clinical DPOAE pass criterion (>= 7 dB SNR)
+spl_threshold_db = -50.0                 # Minimum emission SPL threshold
+max_tries = 1                            # Number of retries per frequency pair
+constant_tone_seconds = 5                # Duration of dual-tone stimulus presentation per pair
+pass_rule_min_frequencies = 3            # Must pass >= 3 of 4 frequencies for overall PASS
+
+[artifact_rejection]
+enabled = true
+art_threshold_db = 4.0                   # If broadband artifact energy jumps >= 4 dB, reject block
+snr_floor_db = -25.0                     # If SNR < -25 dB, reject block
+imd_threshold = 200.0                    # If 2f2-f1 IMD spike SNR > 200, subtract IMD from SNR
+amp_threshold = 500                      # Initial block amplitude check threshold (fixed mean abs)
+
+[fit_check]
+enabled = false                          # Probe seal check before test (toggle via CLI --fit-check)
+check_frequency_hz = 226                 # 226 Hz standard tympanometric probe tone
+seal_check_threshold = 200               # Lower envelope threshold (loose seal if below)
+seal_occlusion_threshold = 500           # Upper envelope threshold (blocked/occluded probe if above)
+consecutive_pass_buffers = 25            # Must maintain valid envelope for 25 consecutive buffers
+calib_signal = "tone"                    # "tone" (226 Hz) or "chirp"
+tone_volume = 0.6                        # Playback volume for 226 Hz fit check
+
+[volume_calibration]
+enabled = true                           # Run in-ear volume calibration sequence before test
+chirp_start_hz = 1000.0
+chirp_end_hz = 4000.0
+chirp_duration_seconds = 0.1
+tone_duration_seconds = 0.2
+examine_duration_seconds = 0.1
+pad_duration_seconds = 0.05
+latency_search_window_seconds = 0.5      # First 0.5 s searched via cross-correlation
+
+# Active and supported frequency pairs:
+# At Fs = 48000 Hz with N = 48000 samples, bin index == frequency in Hz exactly!
+
+[[frequency_pairs]]
+f2 = 2016
+f1 = 1640
+oae_bin = 1264                           # 2*1640 - 2016 = 1264 Hz
+imd_bin = 2392                           # 2*2016 - 1640 = 2392 Hz
+active = true
+
+[[frequency_pairs]]
+f2 = 2953
+f1 = 2438
+oae_bin = 1923                           # 2*2438 - 2953 = 1923 Hz
+imd_bin = 3468                           # 2*2953 - 2438 = 3468 Hz
+active = true
+
+[[frequency_pairs]]
+f2 = 3985
+f1 = 3282
+oae_bin = 2579                           # 2*3282 - 3985 = 2579 Hz
+imd_bin = 4688                           # 2*3985 - 3282 = 4688 Hz
+active = true
+
+[[frequency_pairs]]
+f2 = 4969
+f1 = 4078
+oae_bin = 3187                           # 2*4078 - 4969 = 3187 Hz
+imd_bin = 5860                           # 2*4969 - 4078 = 5860 Hz
+active = true
+
+[[frequency_pairs]]
+f2 = 1031
+f1 = 844
+oae_bin = 657
+imd_bin = 1218
+active = false
+
+[[frequency_pairs]]
+f2 = 1500
+f1 = 1219
+oae_bin = 938
+imd_bin = 1781
+active = false
+
+[[frequency_pairs]]
+f2 = 6000
+f1 = 4922
+oae_bin = 3844
+imd_bin = 7078
+active = false
+
+[[frequency_pairs]]
+f2 = 8016
+f1 = 6563
+oae_bin = 5110
+imd_bin = 9469
+active = false
+
+[noise_thresholds]
+# Ambient noise floor thresholds in dB per active frequency pair [2016, 2953, 3985, 4969]
+# If >= 3 bands exceed threshold, flagged as noisy -> "retry"
+values = [96.0, 94.0, 95.0, 87.0]
+
+# ==============================================================================
+# HARDWARE PROFILES
+# Default active profile is selected via CLI: --profile <name>
+# ==============================================================================
+
+[profiles.ugreen_80864_rpi5]
+description = "Raspberry Pi 5 + UGREEN 80864 USB Audio Adapter + Sony/PUI Probe (Baseline: sch3)"
+master_volume = 0.5
+vol_default = 0.5
+seal_check_threshold = 200
+
+# Dual-tone test playback volume fraction (f2)
+[profiles.ugreen_80864_rpi5.vol1_defaults]
+2016 = 0.50
+2953 = 0.35
+3985 = 1.00
+4969 = 1.00
+
+# Calibration pulse baseline volumes (f1 and f2)
+[profiles.ugreen_80864_rpi5.vol3]
+1640 = 0.15
+2016 = 0.05
+2438 = 0.07
+2953 = 0.09
+3282 = 0.25
+3985 = 0.03
+4078 = 0.18
+4969 = 0.08
+
+# Acoustic transfer & exponential gain solver:
+# Tone indices: [1640, 2016, 2438, 2953, 3282, 3985, 4078, 4969]
+# SPL = p1 * fft_mag_dB + p2
+# target_tx = a * exp(b * target_rx_dB)
+[profiles.ugreen_80864_rpi5.calibration]
+p1 = [1.007452, 1.017886, 1.042927, 0.873107, 0.600468, 0.964023, 0.820168, 0.667735]
+p2 = [-56.3927, -52.1397, -55.0837, -26.9589, -3.5698, -48.2011, -35.9379, -14.1056]
+a  = [4.84e-08, 1.36e-07, 1.05e-07, 3.70e-07, 2.22e-07, 5.82e-07, 4.52e-07, 9.94e-07]
+b  = [0.115512, 0.114486, 0.113701, 0.110679, 0.111722, 0.115078, 0.115516, 0.115266]
+spl_targets = [60.0, 50.0, 60.0, 50.0, 60.0, 50.0, 60.0, 50.0]
+defaults = [0.11, 0.05, 0.13, 0.04, 0.14, 0.03, 0.16, 0.05]
+maxvals = [0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50]
+
+[profiles.sch3]
+description = "Samsung Galaxy S21 (sch3 baseline)"
+master_volume = 0.5
+vol_default = 0.5
+seal_check_threshold = 200
+
+[profiles.sch3.vol1_defaults]
+2016 = 0.50
+2953 = 0.35
+3985 = 1.00
+4969 = 1.00
+
+[profiles.sch3.vol3]
+1640 = 0.15
+2016 = 0.05
+2438 = 0.07
+2953 = 0.09
+3282 = 0.25
+3985 = 0.03
+4078 = 0.18
+4969 = 0.08
+
+[profiles.sch3.calibration]
+p1 = [1.007452171, 1.017885848, 1.042927416, 0.8731073507, 0.6004675468, 0.964022883, 0.8201684785, 0.6677347943]
+p2 = [-56.39272591, -52.13974248, -55.08372389, -26.95887362, -3.569798211, -48.20108798, -35.93794362, -14.10560189]
+a  = [4.84e-08, 1.36e-07, 1.05e-07, 3.70e-07, 2.22e-07, 5.82e-07, 4.52e-07, 9.94e-07]
+b  = [0.115511649, 0.1144855946, 0.1137014971, 0.1106786399, 0.1117217011, 0.115077944, 0.1155163777, 0.1152659994]
+spl_targets = [60.0, 50.0, 60.0, 50.0, 60.0, 50.0, 60.0, 50.0]
+defaults = [0.11, 0.05, 0.13, 0.04, 0.14, 0.03, 0.16, 0.05]
+maxvals = [0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50]
+
+[profiles.sch2]
+description = "Samsung Galaxy S9 (SM-G960U1 - Snapdragon)"
+master_volume = 0.95
+vol_default = 0.95
+seal_check_threshold = 200
+
+[profiles.sch2.vol1_defaults]
+2016 = 0.95
+2953 = 0.95
+3985 = 0.95
+4969 = 0.95
+
+[profiles.sch2.vol3]
+1640 = 0.11
+2016 = 0.05
+2438 = 0.10
+2953 = 0.04
+3282 = 0.14
+3985 = 0.03
+4078 = 0.16
+4969 = 0.05
+
+[profiles.sch2.calibration]
+p1 = [0.9987, 0.9431, 0.9716, 0.9245, 0.9786, 0.8732, 0.8763, 0.8571]
+p2 = [-52.7356, -44.4052, -50.4828, -39.9062, -46.5441, -28.9041, -30.4703, -25.5625]
+a  = [4.84e-08, 1.36e-07, 1.05e-07, 3.70e-07, 2.22e-07, 5.82e-07, 4.52e-07, 9.94e-07]
+b  = [0.1155, 0.1145, 0.1137, 0.1107, 0.1117, 0.1151, 0.1155, 0.1153]
+spl_targets = [65.0, 55.0, 65.0, 55.0, 65.0, 55.0, 65.0, 55.0]
+defaults = [0.01, 0.05, 0.13, 0.04, 0.14, 0.03, 0.16, 0.05]
+maxvals = [1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00]
+
+[profiles.sch]
+description = "Samsung Galaxy S9 (sch original)"
+master_volume = 0.85
+vol_default = 0.85
+seal_check_threshold = 200
+
+[profiles.sch.vol1_defaults]
+2016 = 0.85
+2953 = 0.85
+3985 = 0.85
+4969 = 0.85
+
+[profiles.sch.vol3]
+1640 = 0.16
+2016 = 0.04
+2438 = 0.11
+2953 = 0.03
+3282 = 0.28
+3985 = 0.03
+4078 = 0.95
+4969 = 0.26
+
+[profiles.sch.calibration]
+p1 = [1.007452, 1.017886, 1.042927, 0.873107, 0.600468, 0.964023, 0.820168, 0.667735]
+p2 = [-56.3927, -52.1397, -55.0837, -26.9589, -3.5698, -48.2011, -35.9379, -14.1056]
+a  = [4.84e-08, 1.36e-07, 1.05e-07, 3.70e-07, 2.22e-07, 5.82e-07, 4.52e-07, 9.94e-07]
+b  = [0.115512, 0.114486, 0.113701, 0.110679, 0.111722, 0.115078, 0.115516, 0.115266]
+spl_targets = [65.0, 55.0, 65.0, 55.0, 65.0, 55.0, 65.0, 55.0]
+defaults = [0.16, 0.04, 0.11, 0.03, 0.28, 0.08, 0.95, 0.026]
+maxvals = [0.26, 0.14, 0.21, 0.13, 0.38, 0.18, 1.00, 0.05]
+
+[profiles.pixel_calib]
+description = "Google Pixel 3a XL"
+master_volume = 1.0
+vol_default = 1.0
+seal_check_threshold = 200
+
+[profiles.pixel_calib.vol1_defaults]
+2016 = 1.00
+2953 = 1.00
+3985 = 1.00
+4969 = 1.00
+
+[profiles.pixel_calib.vol3]
+1640 = 0.11
+2016 = 0.05
+2438 = 0.13
+2953 = 0.04
+3282 = 0.14
+3985 = 0.03
+4078 = 0.16
+4969 = 0.05
+
+[profiles.pixel_calib.calibration]
+p1 = [8.899738e-01, 9.188492e-01, 8.031414e-01, 7.648207e-01, 8.895420e-01, 6.494005e-01, 5.693497e-01, 9.814025e-01]
+p2 = [-4.783751e+01, -5.028895e+01, -3.908130e+01, -3.830530e+01, -4.961602e+01, -1.889693e+01, -1.340673e+01, -5.816146e+01]
+a  = [2.150073e-07, 1.793038e-07, 2.732658e-07, 2.041620e-07, 1.584278e-07, 7.946715e-07, 8.109509e-07, 1.561679e-07]
+b  = [1.141896e-01, 1.149387e-01, 1.152425e-01, 1.142550e-01, 1.151937e-01, 1.167582e-01, 1.142981e-01, 1.159984e-01]
+spl_targets = [60.0, 50.0, 60.0, 50.0, 60.0, 50.0, 60.0, 50.0]
+defaults = [0.11, 0.05, 0.13, 0.04, 0.14, 0.03, 0.16, 0.05]
+maxvals = [0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50]
+
+[profiles.doogee_calib]
+description = "Doogee S96 Pro"
+master_volume = 1.0
+vol_default = 1.0
+seal_check_threshold = 200
+
+[profiles.doogee_calib.vol1_defaults]
+2016 = 1.00
+2953 = 1.00
+3985 = 1.00
+4969 = 1.00
+
+[profiles.doogee_calib.vol3]
+1640 = 0.20
+2016 = 0.10
+2438 = 0.13
+2953 = 0.04
+3282 = 0.14
+3985 = 0.03
+4078 = 0.16
+4969 = 0.05
+
+[profiles.doogee_calib.calibration]
+p1 = [1.006488e+00, 1.037554e+00, 1.017368e+00, 1.007323e+00, 1.031130e+00, 1.082373e+00, 1.082226e+00, 1.144910e+00]
+p2 = [-4.970536e+01, -5.254169e+01, -5.328073e+01, -5.773659e+01, -5.781152e+01, -4.571608e+01, -4.849192e+01, -5.669839e+01]
+a  = [2.603486e-07, 1.635032e-07, 2.813279e-07, 2.144288e-07, 1.792826e-07, 9.899952e-07, 7.992111e-07, 2.185157e-07]
+b  = [1.147314e-01, 1.137447e-01, 1.143069e-01, 1.138815e-01, 1.140720e-01, 1.152128e-01, 1.151401e-01, 1.146910e-01]
+spl_targets = [60.0, 50.0, 60.0, 50.0, 60.0, 50.0, 60.0, 50.0]
+defaults = [0.11, 0.05, 0.13, 0.04, 0.14, 0.03, 0.16, 0.05]
+maxvals = [0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50]

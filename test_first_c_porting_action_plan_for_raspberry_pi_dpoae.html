@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test-First C++ Porting Action Plan for Raspberry Pi DPOAE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Tier 3 Utilitarian · Test-Driven Engineering Action Plan · split answer-first hero · TDD architecture SVG -> Step 1 test matrix -> repo layout -> Steps 2-8 execution table -> hardware bring-up band · IBM Plex Sans + IBM Plex Mono · Cool Technical Grey #F4F6F8 + Emerald #047857/#065F46 + Indigo #3730A3/#312E81 · 0px radius · inline emphasis metric · TDD Red-Green gate SVG */
+
+:root {
+  --paper: #F4F6F8;
+  --ink: #0F172A;
+  --ink2: #1E293B;
+  --mute: #334155;
+  --hair: #CBD5E1;
+  --accent: #047857;
+  --accent-text: #065F46;
+  --accent-2: #3730A3;
+  --accent-2-text: #312E81;
+  --band: #FFFFFF;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  padding: 64px clamp(24px, 10.4vw, 112px) 92px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+main {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: 24px;
+}
+
+.col-full { grid-column: 1 / -1; }
+.sec { margin-top: 64px; }
+.sec-tight { margin-top: 40px; }
+
+/* Split Answer-First Hero */
+.hero-split {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: 24px;
+  row-gap: 20px;
+  padding-bottom: 28px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.hero-main {
+  grid-column: 1 / span 8;
+}
+
+.hero-stat {
+  grid-column: 9 / -1;
+  border-left: 1px solid var(--hair);
+  padding-left: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+h1 {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: clamp(34px, 3.8vw, 48px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+  margin: 0 0 16px;
+  text-wrap: balance;
+}
+
+.hero-num {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: clamp(44px, 4.8vw, 64px);
+  font-weight: 700;
+  line-height: 1.0;
+  letter-spacing: -0.03em;
+  color: var(--accent-text);
+  margin-bottom: 8px;
+}
+
+.hero-num-sub {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--mute);
+  max-width: 28ch;
+}
+
+h2 {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: clamp(23px, 2.3vw, 29px);
+  font-weight: 700;
+  line-height: 1.22;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  margin: 0 0 14px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hair);
+  text-wrap: balance;
+}
+
+h3 {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+
+p {
+  margin: 0 0 14px;
+  color: var(--ink2);
+  max-width: 68ch;
+}
+
+p:last-child {
+  margin-bottom: 0;
+}
+
+.deck {
+  font-size: 17.5px;
+  line-height: 1.55;
+  color: var(--ink2);
+  max-width: 64ch;
+  margin-bottom: 0;
+}
+
+code {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13.5px;
+  color: var(--accent-2-text);
+}
+
+strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Figures & SVG */
+figure {
+  margin: 28px 0 32px;
+  padding: 0;
+}
+
+.fig-title {
+  font-size: 17.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+  margin: 0 0 12px;
+  max-width: 68ch;
+}
+
+figcaption {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--mute);
+  margin-top: 10px;
+  max-width: 74ch;
+}
+
+svg.viz {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Open Tables (max 3, no zebra stripes) */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 20px 0 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+thead th {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  border-top: 2px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  padding: 10px 14px 10px 0;
+  vertical-align: bottom;
+}
+
+tbody td {
+  padding: 13px 14px 13px 0;
+  border-bottom: 1px solid var(--hair);
+  color: var(--ink2);
+  vertical-align: top;
+}
+
+tbody tr:last-child td {
+  border-bottom: 1.5px solid var(--ink);
+}
+
+.num {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.gate-pass {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--accent-text);
+  white-space: nowrap;
+}
+
+.gate-hw {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--accent-2-text);
+  white-space: nowrap;
+}
+
+/* Multi-column open strips */
+.col-strip-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 36px;
+  row-gap: 24px;
+  margin-top: 20px;
+}
+
+.strip-item {
+  border-top: 1px solid var(--hair);
+  padding-top: 14px;
+}
+
+.strip-sub {
+  font-size: 13.5px;
+  color: var(--mute);
+  margin-bottom: 8px;
+}
+
+/* Open Code Block */
+pre.tree-block {
+  margin: 20px 0 0;
+  padding: 4px 0 4px 20px;
+  border-left: 2px solid var(--accent-2);
+  overflow-x: auto;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  line-height: 1.58;
+  color: var(--ink);
+  background: transparent;
+}
+
+pre.tree-block .cm { color: var(--mute); }
+pre.tree-block .hi { color: var(--accent-text); font-weight: 500; }
+
+/* Single Full-Bleed Band (Crisp White Contrast Band) */
+.full-band {
+  grid-column: 1 / -1;
+  margin-left: calc(-1 * clamp(24px, 10.4vw, 112px));
+  margin-right: calc(-1 * clamp(24px, 10.4vw, 112px));
+  padding: 44px clamp(24px, 10.4vw, 112px);
+  background: var(--band);
+  border-top: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+  margin-top: 64px;
+}
+
+.full-band h2 {
+  border-top: none;
+  padding-top: 0;
+}
+
+ol.action-steps {
+  margin: 16px 0 0;
+  padding-left: 22px;
+  max-width: 70ch;
+}
+
+ol.action-steps li {
+  margin-bottom: 12px;
+  color: var(--ink2);
+  font-size: 15px;
+}
+
+@media (max-width: 900px) {
+  .hero-main, .hero-stat {
+    grid-column: 1 / -1;
+  }
+  .hero-stat {
+    border-left: none;
+    border-top: 1px solid var(--hair);
+    padding-left: 0;
+    padding-top: 16px;
+  }
+  .col-strip-2 {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+</head>
+<body>
+<main>
+
+  <!-- SPLIT ANSWER-FIRST HERO -->
+  <header class="col-full hero-split">
+    <div class="hero-main">
+      <h1>Test-First Action Plan for Porting DPOAE to Raspberry Pi C++</h1>
+      <p class="deck">Start by writing five C++ behavioral test suites that encode the exact math, thresholds, and state transitions of the Android Java code—compiling against stub interfaces before a single line of production DSP or <code>miniaudio</code> I/O is written. Each subsequent step turns one test suite green until the full headless binary runs on your UGREEN 80864 USB adapter.</p>
+    </div>
+    <div class="hero-stat">
+      <div class="hero-num">8 Steps</div>
+      <div class="hero-num-sub">Step 1 locks down 5 C++ test suites mimicking Java behavior; Steps 2–6 turn them green offline; Steps 7–8 bring up Raspberry Pi hardware.</div>
+    </div>
+  </header>
+
+  <!-- VISUAL: TDD RED-TO-GREEN EXECUTION PIPELINE -->
+  <section class="col-full sec-tight">
+    <figure>
+      <div class="fig-title">Writing the C++ behavioral test harness first gates every porting step before touching Raspberry Pi hardware</div>
+      <svg class="viz" viewBox="0 0 720 300" role="img" aria-label="Test-driven porting flow from Step 1 C++ test harness through offline modules to Raspberry Pi hardware bring-up">
+        <defs>
+          <marker id="arr-g" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#047857"/>
+          </marker>
+          <marker id="arr-i" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#3730A3"/>
+          </marker>
+        </defs>
+
+        <!-- Column 1: Step 1 Test Suite -->
+        <rect x="16" y="24" width="212" height="248" fill="#FFFFFF" stroke="#047857" stroke-width="2"/>
+        <text x="30" y="50" font-family="IBM Plex Sans, sans-serif" font-size="15" font-weight="700" fill="#065F46">Step 1 · C++ Test Harness</text>
+        <text x="30" y="70" font-family="IBM Plex Mono, monospace" font-size="12" fill="#334155">GoogleTest / Catch2 (RED)</text>
+        <line x1="30" y1="82" x2="212" y2="82" stroke="#CBD5E1" stroke-width="1"/>
+        <text x="30" y="106" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">1. test_config_toml</text>
+        <text x="30" y="136" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">2. test_signal_gen</text>
+        <text x="30" y="166" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">3. test_dsp_engine</text>
+        <text x="30" y="196" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">4. test_calibrator</text>
+        <text x="30" y="226" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">5. test_session_mock</text>
+        <text x="30" y="256" font-family="IBM Plex Sans, sans-serif" font-size="12.5" fill="#334155">Mirrors Java specs &amp; fixtures</text>
+
+        <!-- Column 2: Offline Implementation Steps 2-6 -->
+        <rect x="272" y="24" width="206" height="248" fill="#FFFFFF" stroke="#3730A3" stroke-width="1.8"/>
+        <text x="286" y="50" font-family="IBM Plex Sans, sans-serif" font-size="15" font-weight="700" fill="#312E81">Steps 2–6 · Offline Port</text>
+        <text x="286" y="70" font-family="IBM Plex Mono, monospace" font-size="12" fill="#334155">Turn suites GREEN on host</text>
+        <line x1="286" y1="82" x2="462" y2="82" stroke="#CBD5E1" stroke-width="1"/>
+        <text x="286" y="106" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">S2: oae_config (toml++)</text>
+        <text x="286" y="136" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">S3: signal_gen (PCM16)</text>
+        <text x="286" y="166" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">S4: dsp_engine (FFTW3)</text>
+        <text x="286" y="196" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">S5: calibrator (Fit/SPL)</text>
+        <text x="286" y="226" font-family="IBM Plex Mono, monospace" font-size="12.5" fill="#0F172A">S6: session + MockAudio</text>
+        <text x="286" y="256" font-family="IBM Plex Sans, sans-serif" font-size="12.5" fill="#065F46">All ctest targets pass</text>
+
+        <!-- Column 3: RPi Hardware Bring-Up Steps 7-8 -->
+        <rect x="520" y="24" width="184" height="248" fill="#FFFFFF" stroke="#0F172A" stroke-width="1.8"/>
+        <text x="534" y="50" font-family="IBM Plex Sans, sans-serif" font-size="15" font-weight="700" fill="#0F172A">Steps 7–8 · RPi HW</text>
+        <text x="534" y="70" font-family="IBM Plex Mono, monospace" font-size="12" fill="#334155">UGREEN 80864 + Probe</text>
+        <line x1="534" y1="82" x2="690" y2="82" stroke="#CBD5E1" stroke-width="1"/>
+        <text x="534" y="114" font-family="IBM Plex Sans, sans-serif" font-size="13.5" font-weight="600" fill="#0F172A">S7: miniaudio Duplex</text>
+        <text x="534" y="134" font-family="IBM Plex Mono, monospace" font-size="12" fill="#334155">ALSA + amixer lock</text>
+        <text x="534" y="152" font-family="IBM Plex Mono, monospace" font-size="12" fill="#334155">TRRS loopback test</text>
+        <line x1="534" y1="172" x2="690" y2="172" stroke="#CBD5E1" stroke-width="1"/>
+        <text x="534" y="198" font-family="IBM Plex Sans, sans-serif" font-size="13.5" font-weight="600" fill="#0F172A">S8: 2cc Coupler Cal</text>
+        <text x="534" y="218" font-family="IBM Plex Mono, monospace" font-size="12" fill="#334155">Fit p1, p2, a, b</text>
+        <text x="534" y="236" font-family="IBM Plex Mono, monospace" font-size="12" fill="#334155">Verify IMD &lt; -15 dB</text>
+
+        <!-- Connecting Arrows -->
+        <line x1="228" y1="102" x2="270" y2="102" stroke="#047857" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <line x1="228" y1="132" x2="270" y2="132" stroke="#047857" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <line x1="228" y1="162" x2="270" y2="162" stroke="#047857" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <line x1="228" y1="192" x2="270" y2="192" stroke="#047857" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <line x1="228" y1="222" x2="270" y2="222" stroke="#047857" stroke-width="1.5" marker-end="url(#arr-g)"/>
+
+        <line x1="478" y1="148" x2="518" y2="148" stroke="#3730A3" stroke-width="1.8" marker-end="url(#arr-i)"/>
+      </svg>
+      <figcaption>Every C++ module is implemented against a pre-written behavioral test suite derived directly from the Android Java source before integrating physical USB audio.</figcaption>
+    </figure>
+  </section>
+
+  <!-- SECTION 1: STEP 1 DEEP DIVE (WRITING THE C++ TESTS FIRST) -->
+  <section class="col-full sec-tight">
+    <h2>Step 1: Build the C++ test harness mimicking Java behavior</h2>
+    <p>Before porting any implementation logic, initialize the CMake (C++20) project with stub headers for all six modules and write five standalone <strong>GoogleTest</strong> (or Catch2 v3) suites. To guarantee exact parity, generate golden input/output fixtures for pure-Java routines (or synthesize deterministic 48 kHz test waveforms with known SNR, delay, and artifact spikes) and run <code>ctest</code> to confirm every test compiles and fails cleanly ("red") against the stubs.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>C++ Test Suite</th>
+            <th>Java Behavior Mimicked</th>
+            <th>Synthetic / Golden Test Cases</th>
+            <th>Exact Pass Assertions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>test_config_toml.cpp</code></td>
+            <td><code>Constants.init()</code><br><code>Constants.populateVolume()</code></td>
+            <td>Load default annotated <code>oae_config.toml</code>; load malformed TOML with missing fields or out-of-range gain (&gt; 1.0).</td>
+            <td>4 active pairs match <code>f2={2016,2953,3985,4969}</code>, <code>oae={1264,1923,2579,3187}</code>; invalid config returns structured error without crashing.</td>
+          </tr>
+          <tr>
+            <td><code>test_signal_gen.cpp</code></td>
+            <td><code>SignalGenerator.sine2speaker()</code><br><code>Utils.generateChirpSpeaker()</code><br><code>AngularMath.Normalize()</code></td>
+            <td>Generate 1 s stereo pair <code>(1640, 2016)</code> at <code>v1=0.15, v2=0.05</code>; generate 0.1 s chirp <code>1–4 kHz</code>; generate full 8-tone calibration sequence.</td>
+            <td>Buffer length <code>2*N</code>; Left channel FFT peaks strictly at <code>1640 Hz</code> (0 energy at <code>2016 Hz</code>); Right strictly at <code>2016 Hz</code>; matches Java sample values within ±1 LSB.</td>
+          </tr>
+          <tr>
+            <td><code>test_dsp_engine.cpp</code></td>
+            <td><code>Signal.work()</code><br><code>Signal.calcSNR()</code><br><code>Signal.calcArt()</code><br><code>Signal.ampCheck()</code></td>
+            <td>(a) Clean 5 s tone + <code>2f1−f2</code> OAE.<br>(b) Same + broadband burst in sec 2.<br>(c) High <code>2f2−f1</code> IMD spike.<br>(d) High amplitude burst in sec 1.</td>
+            <td>(a) Trims first 48,000 samples, averages 4×1 s blocks, SNR matches analytical dB within ±0.1 dB.<br>(b) Rejects sec 2 when <code>Δart ≥ 4 dB</code>; restores <code>sumbuffer</code>.<br>(c) Switches to <code>snr1 − snr2</code> when <code>snr2 &gt; 200</code>.</td>
+          </tr>
+          <tr>
+            <td><code>test_calibrator.cpp</code></td>
+            <td><code>Utils.volcalib()</code><br><code>Utils.compute()</code><br><code>OfflineRecorder.envCheck()</code><br><code>OfflineRecorder.threshCheck()</code></td>
+            <td>(a) Delay 8-tone calibration sequence by exactly <code>1,728</code> samples (36 ms) + low noise.<br>(b) Stream 25 envelopes inside <code>[200, 500]</code> vs. one spike at <code>550</code> or dip at <code>150</code>.</td>
+            <td>(a) FFT <code>xcorr</code> recovers delay within ±1 sample; solves <code>p1·amp+p2</code> and <code>a·exp(b·target_rx)</code>; clamps to <code>default_tx_gain</code> if exceeding <code>max_tx_gain</code>.<br>(b) Passes only on 25 consecutive in-bounds buffers.</td>
+          </tr>
+          <tr>
+            <td><code>test_session_mock.cpp</code></td>
+            <td><code>MeasureFragment.SendSignal</code><br><code>checkNoiseThresholds()</code><br><code>checkStatus()</code></td>
+            <td>Inject <code>MockAudioEngine</code> returning synthetic ear responses for 4 pairs (3 passing, 1 failing; then 3 noisy bands exceeding <code>[96,94,95,87]</code> dB).</td>
+            <td>Executes <code>FIT → CALIB → PAIR[0..3] → EVAL → SAVE</code> in order; 3/4 passing outputs <code>Pass</code>; ≥3 noisy bands flags <code>retry</code>; writes valid 48 kHz WAV + JSON summary.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col-strip-2">
+      <div class="strip-item">
+        <h3>Recommended repository layout</h3>
+        <div class="strip-sub">Keep tests and mock audio cleanly decoupled from production modules</div>
+<pre class="tree-block">dpoae-rpi/
+├── CMakeLists.txt           <span class="cm"># C++20, FFTW3, GTest, toml++, miniaudio</span>
+├── config/
+│   └── oae_config.toml      <span class="cm"># Annotated config with UGREEN 80864 profile</span>
+├── include/oae/             <span class="cm"># Pure interfaces (IAudioEngine, DspEngine...)</span>
+├── src/                     <span class="cm"># 6 modules + main CLI entry point</span>
+├── scripts/
+│   └── lock_ugreen_80864.sh <span class="cm"># amixer fixed gain + disable AGC/sidetone</span>
+└── <span class="hi">tests/</span>                   <span class="cm"># Step 1: 5 GTest suites + MockAudioEngine</span>
+    ├── fixtures/            <span class="cm"># Golden PCM vectors / synthetic waveforms</span>
+    ├── mock_audio_engine.hpp
+    ├── test_config_toml.cpp
+    ├── test_signal_gen.cpp
+    ├── test_dsp_engine.cpp
+    ├── test_calibrator.cpp
+    └── test_session_mock.cpp</pre>
+      </div>
+      <div class="strip-item">
+        <h3>Why MockAudioEngine is essential in Step 1</h3>
+        <div class="strip-sub">Enables 100% deterministic CI on your laptop or Raspberry Pi</div>
+        <p>Define a minimal virtual interface <code>IAudioEngine</code> with two methods: <code>run_duplex_fixed(tx_stereo, rx_mono_out)</code> for calibration and 5 s tone captures, and <code>run_duplex_streaming(tx_loop_stereo, on_rx_chunk)</code> for continuous fit-checking.</p>
+        <p>In Step 1, <code>MockAudioEngine</code> implements <code>IAudioEngine</code> in memory by feeding pre-baked synthetic or recorded ear-canal signals back into <code>rx_mono_out</code>. In Step 7, <code>MiniaudioEngine</code> implements the exact same interface over ALSA + UGREEN 80864 without changing a single line of DSP or state-machine code.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECTION 2: STEPS 2-8 SEQUENTIAL ACTION PLAN -->
+  <section class="col-full sec">
+    <h2>Steps 2–8: Sequential porting roadmap from green tests to hardware</h2>
+    <p>Execute each step strictly in order. Do not advance to the next step until the verification command for the current step passes with zero warnings or test failures.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Step</th>
+            <th>Concrete Engineering Actions</th>
+            <th>Target Module(s)</th>
+            <th>Exit Gate / Test Turned Green</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="num">Step 2</td>
+            <td>Create the fully commented <code>config/oae_config.toml</code> file. Implement <code>OaeConfig::load()</code> using header-only <code>toml++</code> with explicit schema validation (checking 48 kHz rate, array lengths of 8 for <code>p1/p2/a/b</code>, and safe gain bounds <code>[0.0, 1.0]</code>).</td>
+            <td><code>oae_config</code></td>
+            <td class="gate-pass">ctest -R test_config_toml</td>
+          </tr>
+          <tr>
+            <td class="num">Step 3</td>
+            <td>Port <code>SignalGenerator.java</code> and <code>AngularMath.java</code> into stateless C++20 functions: stereo interleaved <code>make_dual_tone()</code> (<code>f1</code> Left, <code>f2</code> Right at <code>32000 * vol</code>), <code>make_linear_chirp()</code>, and <code>make_calib_sequence()</code> (4,800-sample pad + 0.1 s chirp + 8×0.2 s tones).</td>
+            <td><code>signal_gen</code></td>
+            <td class="gate-pass">ctest -R test_signal_gen</td>
+          </tr>
+          <tr>
+            <td class="num">Step 4</td>
+            <td>Replace the missing Android NDK <code>native-lib</code> with reusable <strong>FFTW3</strong> plans (<code>fftw_plan_dft_r2c_1d</code> for 48,000-sample 1 Hz/bin spectra). Port <code>Signal.work()</code> (1 s trim, coherent averaging, <code>calcArt</code>, rollback on artifact jump ≥ 4 dB, <code>calcSNR</code> ±200 Hz sidebands / ±2 Hz guard, IMD guard, and fixed windowed <code>ampCheck</code>).</td>
+            <td><code>dsp_engine</code></td>
+            <td class="gate-pass">ctest -R test_dsp_engine</td>
+          </tr>
+          <tr>
+            <td class="num">Step 5</td>
+            <td>Implement zero-padded linear FFT cross-correlation in <code>dsp_engine</code>, then port <code>Utils.volcalib()</code> + <code>Utils.compute()</code> (chirp latency alignment, 8-tone 0.1 s window extraction, linear SPL estimate, exponential Tx solver with <code>max_tx_gain</code> clamping) and <code>FitChecker</code> (attack/release envelope + 25-frame bounds check).</td>
+            <td><code>calibrator</code></td>
+            <td class="gate-pass">ctest -R test_calibrator</td>
+          </tr>
+          <tr>
+            <td class="num">Step 6</td>
+            <td>Extract the core state machine from <code>MeasureFragment.SendSignal</code> into <code>SessionRunner</code> using <code>IAudioEngine</code>. Wire <code>checkNoiseThresholds()</code>, <code>checkStatus()</code> (≥ 3/4 passing), JSON result summary, and 16-bit WAV saving via <code>miniaudio.h</code>'s <code>ma_encoder</code>. Build headless CLI entry point.</td>
+            <td><code>session_runner</code></td>
+            <td class="gate-pass">ctest (All 5 suites GREEN)</td>
+          </tr>
+          <tr>
+            <td class="num">Step 7</td>
+            <td>Implement <code>MiniaudioEngine : public IAudioEngine</code> forcing <code>ma_backend_alsa</code>, matching the UGREEN 80864 via <code>ma_context_get_devices()</code>, opening <code>ma_device_type_duplex</code> (48 kHz, S16, 2-ch Tx / 1-ch Rx), and exchanging PCM via <code>ma_pcm_rb</code>. Write <code>scripts/lock_ugreen_80864.sh</code> using <code>amixer</code> to pin playback/capture gains and disable mic AGC/sidetone.</td>
+            <td><code>audio_engine</code><br><code>amixer script</code></td>
+            <td class="gate-hw">RPi TRRS loopback: 0 xruns / 60 s</td>
+          </tr>
+          <tr>
+            <td class="num">Step 8</td>
+            <td>Insert the OAE probe connected to UGREEN 80864 into a 2cc acoustic coupler with a reference SPL meter. Sweep digital gains across all 8 calibration tones, fit the new <code>p1, p2, a, b</code> arrays into <code>oae_config.toml</code>, and verify passive-cavity IMD at <code>2f1 − f2</code> to rule out TRRS shared-ground crosstalk.</td>
+            <td><code>oae_config.toml</code><br>(80864 profile)</td>
+            <td class="gate-hw">65/55 dB SPL ± 2 dB; IMD &lt; −15 dB</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- FULL-BLEED BAND: IMMEDIATE FIRST SESSION CHECKLIST -->
+  <section class="full-band">
+    <h2>Exact commands to kick off Step 1 on Linux or Raspberry Pi</h2>
+    <p>You can complete Steps 1 through 6 on any Linux desktop, WSL2 instance, or directly on the Raspberry Pi before plugging in the UGREEN 80864.</p>
+    <ol class="action-steps">
+      <li><strong>Install build &amp; DSP packages:</strong> Run <code>sudo apt install cmake g++ libfftw3-dev libasound2-dev</code> (and vendor single-header <code>miniaudio.h</code> and <code>toml.hpp</code> into <code>third_party/</code>, plus FetchContent for GoogleTest in <code>CMakeLists.txt</code>).</li>
+      <li><strong>Create stub headers &amp; Step 1 tests first:</strong> Define <code>include/oae/*.hpp</code> with empty function bodies returning dummy values, then write all five <code>tests/test_*.cpp</code> files and verify <code>cmake -B build &amp;&amp; cmake --build build &amp;&amp; ctest --test-dir build --output-on-failure</code> compiles cleanly and reports expected red failures.</li>
+      <li><strong>Lock down bug parity choices up front:</strong> In <code>test_dsp_engine.cpp</code>, explicitly assert the corrected windowed mean-abs <code>ampCheck()</code> (fixing Java's missing <code>summer = 0</code> reset) and confirm whether you want a CLI flag (<code>--legacy-amp-check</code>) only if you plan to compare against old Android logs.</li>
+    </ol>
+  </section>
+
+</main>
+</body>
+</html>

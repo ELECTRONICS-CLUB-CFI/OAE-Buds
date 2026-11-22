@@ -32,6 +32,9 @@ public:
         std::span<const int16_t> tx_stereo_loop,
         std::function<bool(std::span<const int16_t>)> on_rx_chunk) = 0;
 
+    // Immediately interrupt and mute ongoing audio playback/recording
+    virtual void stop() {}
+
     virtual void close() = 0;
 };
 

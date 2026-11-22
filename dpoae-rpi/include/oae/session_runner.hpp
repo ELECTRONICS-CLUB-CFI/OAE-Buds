@@ -4,6 +4,7 @@
 #include <vector>
 #include <span>
 #include <cstdint>
+#include <atomic>
 #include "oae_config.hpp"
 #include "dsp_engine.hpp"
 #include "audio_engine.hpp"
@@ -12,13 +13,15 @@ namespace oae {
 namespace session {
 
 struct SessionSummary {
+    std::string session_id;
     std::string patient_id = "0";
     std::string ear = "left";
+    std::string notes;
     std::string timestamp_str;
     uint64_t timestamp_ms = 0;
     std::string profile_name;
 
-    std::string verdict = "Refer"; // "Pass" or "Refer"
+    std::string verdict = "Refer"; // "Pass", "Refer", or "Aborted"
     uint32_t passed_count = 0;
     uint32_t total_active_frequencies = 0;
 
@@ -40,7 +43,11 @@ public:
     SessionSummary run_session(const std::string& patient_id,
                                const std::string& ear,
                                const std::string& output_dir,
-                               bool verbose = true);
+                               bool verbose = true,
+                               bool json_stream = false,
+                               const std::string& session_id = "",
+                               const std::string& notes = "",
+                               const std::atomic<bool>* stop_flag = nullptr);
 
     // Save 16-bit mono PCM as standard uncompressed WAV file
     static bool save_wav(const std::string& filepath,

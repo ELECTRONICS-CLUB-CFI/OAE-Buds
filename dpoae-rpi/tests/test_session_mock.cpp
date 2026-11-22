@@ -68,8 +68,10 @@ TEST(SessionMockTest, ClinicalReferRuleLessThanThreePassed) {
 
 TEST(SessionMockTest, JsonSummarySerialization) {
     oae::session::SessionSummary s;
+    s.session_id = "sess_test_123";
     s.patient_id = "123";
     s.ear = "right";
+    s.notes = "Patient was quiet";
     s.verdict = "Pass";
     s.passed_count = 3;
     s.total_active_frequencies = 4;
@@ -85,9 +87,39 @@ TEST(SessionMockTest, JsonSummarySerialization) {
     s.results.push_back(r);
 
     std::string json = s.to_json();
+    EXPECT_NE(json.find("\"session_id\": \"sess_test_123\""), std::string::npos);
     EXPECT_NE(json.find("\"patient_id\": \"123\""), std::string::npos);
+    EXPECT_NE(json.find("\"notes\": \"Patient was quiet\""), std::string::npos);
     EXPECT_NE(json.find("\"verdict\": \"Pass\""), std::string::npos);
     EXPECT_NE(json.find("\"snr_db\": 15.0"), std::string::npos);
+}
+
+TEST(SessionMockTest, JsonStreamSessionExecution) {
+    oae::OaeConfig cfg;
+    cfg.fit_check.enabled = false;
+    cfg.vol_calib.enabled = false;
+    cfg.test.pass_rule_min_frequencies = 3;
+
+    oae::test::MockAudioEngine mock_audio;
+    uint32_t total_samples = 5 * 48000;
+    std::vector<uint32_t> oae_freqs = {1264, 1923, 2579, 3187};
+
+    for (size_t i = 0; i < 4; ++i) {
+        std::vector<int16_t> resp(total_samples);
+        for (size_t s = 0; s < total_samples; ++s) {
+            double t = static_cast<double>(s) / 48000.0;
+            resp[s] = static_cast<int16_t>(100.0 * std::sin(2.0 * M_PI * oae_freqs[i] * t));
+        }
+        mock_audio.enqueue_response(std::move(resp));
+    }
+
+    oae::session::SessionRunner runner(cfg, mock_audio);
+    auto summary = runner.run_session("test_stream_user", "left", "./test_results", false, true, "sess_abc", "Test note");
+
+    EXPECT_EQ(summary.session_id, "sess_abc");
+    EXPECT_EQ(summary.notes, "Test note");
+    EXPECT_EQ(summary.patient_id, "test_stream_user");
+    EXPECT_EQ(summary.verdict, "Pass");
 }
 
 #ifndef GTEST_INCLUDE_GTEST_GTEST_H_

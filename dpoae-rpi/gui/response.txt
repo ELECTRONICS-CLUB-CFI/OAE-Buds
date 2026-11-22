@@ -1,0 +1,79 @@
+The architecture is solid for a headless Raspberry Pi 5 field unit—FastAPI + a zero-build static frontend is the right weight class—but there are several **production blockers**, a few **over-engineered or counterproductive UX choices**, and **spec gaps** that will cause bugs during implementation if we don't resolve them before Stage 1.
+
+---
+
+## 1. Critical Blockers (Will Break in Real-World Use)
+
+* **Offline Hotspot vs. CDN Dependencies:** The spec targets a portable Pi accessed over a local Wi-Fi hotspot, yet lists Tailwind CSS, Heroicons, and Chart.js via CDN. On an air-gapped hotspot, the browser has no internet access—meaning **zero styling and broken charts**.
+* *Fix:* Vendor `chart.umd.min.js` locally in `static/vendor/`. Replace Heroicons with inline SVGs for the ~8 icons actually needed. For Tailwind, do **not** use the Play CDN script in production—either compile a single static `app.css` once using the standalone Tailwind CLI binary (no Node.js required) or write a lean custom CSS file.
+
+
+* **C++ `stdout` Block-Buffering Will Freeze Live Telemetry:** When Python spawns `./build/dpoae-rpi` with a pipe (`stdout=PIPE`), C/C++ standard I/O switches from line-buffered to **block-buffered (4 KB)**. FastAPI won't receive a single line until the buffer fills or the process exits—so the UI progress bar will stay stuck at `0%` and jump to `100%`.
+* *Fix:* Add a `--json-stream` (NDJSON) flag to `dpoae-rpi` that outputs structured JSON lines and calls `std::fflush(stdout)` after every event. Avoid regex-scraping human-readable logs; one formatting tweak in C++ will silently break the UI. (As a fallback, wrap execution with `stdbuf -oL`).
+
+
+* **`sudo` Permission Failure on `lock_ugreen_80864.sh`:** Your mixer script calls `sudo alsactl store`. If FastAPI runs as a normal user (e.g., `pi` via systemd), `POST /api/settings/mixer-lock` will hang waiting for a password prompt or fail. Also, there is a **spec mismatch**: Section 4 says capture is locked to `80%`, while your actual script locks Mic/Capture to `100%`.
+* *Fix:* Add the service user to the `audio` group so `amixer` runs without `sudo`, and remove `alsactl store` from the web-triggered path (handle persistence at boot/udev instead). Align the capture gain percentage between the script and the spec.
+
+
+* **No State Recovery on Page Refresh / Tablet Sleep:** Mobile browsers suspend JS and drop WebSockets when the screen locks or the user switches tabs. Right now, if a clinician refreshes during a test—or between the Left and Right ear of a Guided Bilateral test—the frontend loses all active state.
+* *Fix:* Make `GET /api/status` return the full active session state (running ear, current frequency index, completed frequency results so far, and whether a bilateral test is paused waiting for the second ear). On page load or reconnect, the frontend hydrates directly from `/api/status`.
+
+
+
+---
+
+## 2. Evaluation of Design Decisions
+
+| Decision | Verdict | Developer Notes |
+| --- | --- | --- |
+| **FastAPI + Uvicorn** | **Keep** | Ideal for async subprocess supervision and serving static files with minimal RAM overhead on the Pi 5. |
+| **Zero-Build Vanilla HTML5 + ES6** | **Keep (with caveat)** | Great for editing on-device without `npm`. Just keep state management centralized in one tiny `store.js` so your 5 JS modules don't fight over DOM updates. |
+| **Subprocess Runner (`dpoae-rpi`)** | **Keep** | Much safer than Python C-bindings (`ctypes`/`pybind11`) because a C++ audio/DSP crash won't take down the web server, and you can cleanly terminate hung audio runs. |
+| **WebSockets (`/ws/telemetry`)** | **Slightly Overkill** | Every client-to-server action (`start`, `stop`) is already a REST `POST` call. WebSockets are bidirectional, requiring manual reconnect/heartbeat logic and an extra `websockets` dependency. **Server-Sent Events (`EventSource` via `StreamingResponse`)** gives you one-way streaming over standard HTTP with automatic browser reconnection in ~15 lines of code. |
+| **Chart.js for DP-Gram** | **Keep** | Fast, touch-friendly, and lightweight once vendored locally. |
+
+---
+
+## 3. Unnecessary or Counterproductive Elements
+
+* **Hard Countdown Timer (`14s remaining`):** In DPOAE screening with `ampCheck` artifact rejection, ambient noise causes frames to be rejected and retried, making total duration unpredictable. A countdown timer will hit `0s` while the test is still running (or jump backwards), which looks like a frozen app.
+* *Replacement:* Show **elapsed time**, **step progress (`Pair 2 of 4`)**, and a live **artifact/noise status indicator** (e.g., *"Quiet — Measuring"* vs. *"High Noise — Hold Still"*).
+
+
+* **Manual `[ Run ALSA Mixer Lock ]` Button in Settings:** Asking a clinician to manually lock ALSA mixers in a settings tab is a human-error trap—if they forget after a reboot or USB replug, calibration is invalidated.
+* *Replacement:* Trigger the mixer lock automatically via a `udev` rule when the UGREEN 80864 is plugged in, **and** verify/apply it automatically inside `session_manager.py` right before every live test starts. Keep the Settings tab as a read-only hardware health check (with an optional "Re-check Hardware" button).
+
+
+* **Raw JSON as the Primary Clinical Export:** Clinicians rarely read raw JSON files.
+* *Replacement:* Keep JSON download as a secondary developer/archive option, and add a **Print / Save as PDF** button powered purely by `@media print` CSS (`window.print()`). Zero backend dependencies, and tablets/laptops natively export clean clinical PDF reports.
+
+
+
+---
+
+## 4. Overlooked Facts & Edge Cases
+
+* **Missing `notes` Field in the API:** Tab 1 includes a **Clinical Notes** text box, but `POST /api/test/start` only accepts `{ patient_id, ear, profile, mock, fit_check, vol_calib }`. Decide whether `dpoae-rpi` takes `--notes` or whether FastAPI injects `notes` into the saved JSON file after completion.
+* **Bilateral Session Linking:** Guided Bilateral runs Left ear, pauses, then runs Right ear—producing two separate `dpoae-rpi` runs and two JSON files. Without a shared `session_id` (generated by FastAPI and passed to both runs or stored in metadata), **Past Records** cannot group Left + Right ears into a single bilateral patient report.
+* **Single-Hardware Concurrency Lock:** Two browser tabs (or a phone + laptop on the same network) can hit `POST /api/test/start` simultaneously. There is only one UGREEN audio card. `session_manager.py` needs an `asyncio.Lock` to reject concurrent starts with `409 Conflict` and broadcast the active session state to all connected clients.
+* **Acoustic Safety on `STOP / ABORT`:** Sending `SIGTERM` to `dpoae-rpi` must guarantee that the C++ engine immediately mutes/closes the ALSA playback stream before exiting (otherwise a continuous tone could hang in the patient's ear or leave the ALSA device locked as `EBUSY` for the next test). Add a 2-second grace timeout before escalating to `SIGKILL`.
+* **Missing UI Phases for `--fit-check` and `--vol-calib`:** Tab 3 exposes checkboxes for 226 Hz probe fit checks and in-ear volume calibration, but State B (Active Test) only has UI for `frequency_measuring`. If those flags are enabled, the backend needs `phase_changed` events (`fit_check`, `vol_calib`, `dpoae_sweep`) and a failure state (e.g., *"Poor Probe Seal — Reseat Earbud and Retry"*).
+* **Live USB Audio Detection in the Header:** The top bar shows `[ Server: OK ]`, which doesn't tell the clinician if the UGREEN 80864 is actually detected in `/proc/asound/cards`. Add an `[ Audio: UGREEN OK / Disconnected ]` badge polled via `/api/status`, and disable `[ START SCREENING TEST ]` in Live mode if no USB card is present.
+* **DP-Gram SNR Shading Math:** The spec asks for an *"SNR threshold zone shaded in light green."* Because the pass criterion (typically $\text{SNR} \ge 6\text{ dB}$) is relative to the **noise floor** at each frequency rather than a fixed dB SPL line, you cannot use a static horizontal annotation box—you must plot a derived `noise_db + 6` dataset in Chart.js and use Chart.js `fill` between `noise_db` and `noise_db + 6`. Also ensure the X-axis is scaled cleanly for $f_2$ frequencies (2–5 kHz) and clearly plots invalid/rejected points if a frequency fails to converge.
+* **Security & Input Sanitization:**
+* Never spawn `dpoae-rpi` with `shell=True`—use `asyncio.create_subprocess_exec()` with an argument list so a malicious or weird `patient_id` (like `John; rm -rf`) cannot execute shell commands.
+* Validate `filename` in `GET /api/records/{filename}` by resolving the path and verifying it stays strictly inside `results/` (prevents `../../etc/passwd` path traversal).
+* Never hardcode `ws://<pi-ip>:8000` in frontend JS—construct URLs dynamically from `window.location.host` so it works across changing DHCP IPs and mDNS hostnames (`raspberrypi.local`).
+
+
+
+---
+
+## 5. Recommended Spec Revisions Before Stage 1
+
+1. **Vendor all frontend assets** (`chart.umd.min.js`, compiled static CSS, inline SVGs) so the app runs 100% offline.
+2. **Define a clean NDJSON protocol** for `dpoae-rpi --json-stream` (covering `fit_check`, `vol_calib`, `frequency_measuring`, `artifact_warning`, `frequency_result`, and `completed` events with `fflush`).
+3. **Swap WebSockets for SSE** (`/api/telemetry/stream`), or keep WebSockets but require `/api/status` to return full resumable state for reconnects.
+4. **Add `session_id` and `notes**` to `POST /api/test/start` and the saved JSON schema so bilateral tests stay linked.
+5. **Move mixer locking to pre-test automation** (and fix the 80% vs. 100% capture gain mismatch).

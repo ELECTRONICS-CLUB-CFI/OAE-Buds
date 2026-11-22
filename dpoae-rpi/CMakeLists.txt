@@ -71,6 +71,17 @@ endif()
 # Testing
 enable_testing()
 
+option(OAE_USE_SYSTEM_GTEST "Use system GoogleTest if available" ON)
+if(OAE_USE_SYSTEM_GTEST)
+    find_package(GTest QUIET)
+endif()
+
+if(GTest_FOUND)
+    message(STATUS "GoogleTest found: ${GTEST_LIBRARIES}")
+else()
+    message(STATUS "GoogleTest not found or disabled. Using built-in mini_gtest.")
+endif()
+
 set(TEST_TARGETS
     test_config_toml
     test_signal_gen
@@ -83,6 +94,11 @@ foreach(test_name ${TEST_TARGETS})
     add_executable(${test_name} tests/${test_name}.cpp)
     target_link_libraries(${test_name} PRIVATE oae_core)
     target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    if(GTest_FOUND)
+        target_link_libraries(${test_name} PRIVATE GTest::gtest GTest::gtest_main)
+    else()
+        target_compile_definitions(${test_name} PRIVATE OAE_USE_MINI_GTEST=1)
+    endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(${test_name} PRIVATE pthread m)
     endif()

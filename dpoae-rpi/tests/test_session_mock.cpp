@@ -1,4 +1,4 @@
-#if __has_include(<gtest/gtest.h>)
+#if __has_include(<gtest/gtest.h>) && !defined(OAE_USE_MINI_GTEST)
 #include <gtest/gtest.h>
 #else
 #include "mini_gtest.hpp"

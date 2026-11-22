@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 #include <memory>
+#include <cmath>
 
 // External factory for MiniaudioEngine
 extern std::unique_ptr<oae::audio::IAudioEngine> make_audio_engine();

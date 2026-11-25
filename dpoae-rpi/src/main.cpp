@@ -36,6 +36,7 @@ int main(int argc, char* argv[]) {
     std::string out_dir = "./results";
     std::string session_id = "";
     std::string notes = "";
+    std::string audio_device = "";
     bool verbose = true;
     bool mock_mode = false;
     bool json_stream = false;
@@ -63,6 +64,8 @@ int main(int argc, char* argv[]) {
             ear = argv[++i];
         } else if (arg == "--out-dir" && i + 1 < argc) {
             out_dir = argv[++i];
+        } else if (arg == "--device" && i + 1 < argc) {
+            audio_device = argv[++i];
         } else if (arg == "--session-id" && i + 1 < argc) {
             session_id = argv[++i];
         } else if (arg == "--notes" && i + 1 < argc) {
@@ -117,6 +120,7 @@ int main(int argc, char* argv[]) {
                       << "  --patient <id>       Patient ID / identifier (default: 0)\n"
                       << "  --ear <left|right>   Ear under test (default: left)\n"
                       << "  --out-dir <path>     Directory to store JSON and WAV results (default: ./results)\n"
+                      << "  --device <name>      ALSA device name/ID override (e.g., hw:1,0 or plughw:1,0)\n"
                       << "  --session-id <id>    Session tracking UUID for linking bilateral tests\n"
                       << "  --notes <text>       Clinical operator notes\n"
                       << "  --json-stream        Output NDJSON events to stdout with explicit flush\n"
@@ -228,7 +232,7 @@ int main(int argc, char* argv[]) {
         audio_engine = make_audio_engine();
     }
 
-    if (!audio_engine->open(cfg.audio.sample_rate, 2, 1)) {
+    if (!audio_engine->open(cfg.audio.sample_rate, 2, 1, audio_device)) {
         if (json_stream) {
             std::cout << "{\"event\": \"error\", \"message\": \"Could not open duplex audio interface.\"}\n" << std::flush;
         } else {

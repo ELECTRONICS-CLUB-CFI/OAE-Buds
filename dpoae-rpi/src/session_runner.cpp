@@ -85,7 +85,9 @@ std::string SessionSummary::to_json() const {
     ss << "  \"passed_count\": " << passed_count << ",\n";
     ss << "  \"total_active_frequencies\": " << total_active_frequencies << ",\n";
     ss << "  \"noise_check\": \"" << escape_json(noise_check_result) << "\",\n";
+    ss << "  \"fit_check_enabled\": " << (fit_check_enabled ? "true" : "false") << ",\n";
     ss << "  \"fit_check_passed\": " << (fit_check_passed ? "true" : "false") << ",\n";
+    ss << "  \"vol_calib_enabled\": " << (vol_calib_enabled ? "true" : "false") << ",\n";
     ss << "  \"vol_calib_passed\": " << (vol_calib_passed ? "true" : "false") << ",\n";
     ss << "  \"total_duration_seconds\": " << std::fixed << std::setprecision(2) << total_duration_seconds << ",\n";
     if (!dev_telemetry_file.empty()) {
@@ -147,6 +149,8 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
     summary.timestamp_str = time_str;
     summary.timestamp_ms = now_ms;
     summary.profile_name = config_.active_profile_name;
+    summary.fit_check_enabled = config_.fit_check.enabled;
+    summary.vol_calib_enabled = config_.vol_calib.enabled;
 
     auto active_pairs = config_.get_active_pairs();
     summary.total_active_frequencies = static_cast<uint32_t>(active_pairs.size());

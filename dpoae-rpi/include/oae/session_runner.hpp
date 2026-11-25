@@ -27,7 +27,9 @@ struct SessionSummary {
 
     std::vector<dsp::DpoaeResult> results;
     std::string noise_check_result = "noise-pass"; // "noise-pass" or "retry"
+    bool fit_check_enabled = false;
     bool fit_check_passed = true;
+    bool vol_calib_enabled = true;
     bool vol_calib_passed = true;
     double total_duration_seconds = 0.0;
     std::string dev_telemetry_file;

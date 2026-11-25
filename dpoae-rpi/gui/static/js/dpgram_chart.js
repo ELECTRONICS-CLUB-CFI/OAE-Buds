@@ -170,6 +170,25 @@ export function buildEarCardHtml(summary, canvasId, minRequired = 3) {
     })
     .join("");
 
+  const fitBadgeHtml =
+    summary.fit_check_enabled === false
+      ? '<span class="badge badge-neutral">Fit Check: Skipped</span>'
+      : summary.fit_check_passed === false
+        ? '<span class="badge badge-danger">Fit Check: NOT SEALED (Fail)</span>'
+        : '<span class="badge badge-success">Fit Check: SEALED (Pass)</span>';
+
+  const calibBadgeHtml =
+    summary.vol_calib_enabled === false
+      ? '<span class="badge badge-neutral">Vol Calib: Skipped</span>'
+      : summary.vol_calib_passed === false
+        ? '<span class="badge badge-danger">Vol Calib: Failed</span>'
+        : '<span class="badge badge-success">Vol Calib: Pass</span>';
+
+  const noiseBadgeHtml =
+    summary.noise_check === "retry"
+      ? '<span class="badge badge-warning">Ambient Noise: Retry</span>'
+      : '<span class="badge badge-success">Ambient Noise: Pass</span>';
+
   return `
     <div class="card ear-result-card">
       <div class="verdict-banner ${bannerCls}">
@@ -180,6 +199,12 @@ export function buildEarCardHtml(summary, canvasId, minRequired = 3) {
         <div class="verdict-sub">
           ${passedCount} of ${totalFreqs} Frequencies Passed (Min Required: ${minRequired})
         </div>
+      </div>
+
+      <div class="dev-metrics-row" style="margin-bottom: 0.9rem;">
+        ${fitBadgeHtml}
+        ${calibBadgeHtml}
+        ${noiseBadgeHtml}
       </div>
 
       <div class="chart-box">

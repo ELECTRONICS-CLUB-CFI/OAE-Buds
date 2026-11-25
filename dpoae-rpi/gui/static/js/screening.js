@@ -334,6 +334,46 @@ function renderRunningView() {
     artBadge.textContent = "Clear — Measuring";
   }
 
+  const fitBadge = document.getElementById("run-fit-badge");
+  if (fitBadge) {
+    if (!s.fit_check) {
+      fitBadge.className = "badge badge-neutral";
+      fitBadge.textContent = "Fit Check: Skipped";
+    } else if (s.fit_check_passed === true) {
+      fitBadge.className = "badge badge-success";
+      fitBadge.textContent = "Fit Check: SEALED (Pass)";
+    } else if (s.fit_check_passed === false) {
+      fitBadge.className = "badge badge-danger";
+      fitBadge.textContent = "Fit Check: NOT SEALED (Fail)";
+    } else if (s.current_phase === "fit_check") {
+      fitBadge.className = "badge badge-info";
+      fitBadge.textContent = "Fit Check: Checking...";
+    } else {
+      fitBadge.className = "badge badge-neutral";
+      fitBadge.textContent = "Fit Check: Pending";
+    }
+  }
+
+  const calibBadge = document.getElementById("run-calib-badge");
+  if (calibBadge) {
+    if (!s.vol_calib) {
+      calibBadge.className = "badge badge-neutral";
+      calibBadge.textContent = "Vol Calib: Skipped";
+    } else if (s.vol_calib_passed === true) {
+      calibBadge.className = "badge badge-success";
+      calibBadge.textContent = "Vol Calib: Pass";
+    } else if (s.vol_calib_passed === false) {
+      calibBadge.className = "badge badge-danger";
+      calibBadge.textContent = "Vol Calib: Failed";
+    } else if (s.current_phase === "vol_calib") {
+      calibBadge.className = "badge badge-info";
+      calibBadge.textContent = "Vol Calib: Running...";
+    } else {
+      calibBadge.className = "badge badge-neutral";
+      calibBadge.textContent = "Vol Calib: Pending";
+    }
+  }
+
   const pillsGrid = document.getElementById("run-freq-pills");
   const pillsHtml = [];
   for (let i = 1; i <= total; i++) {

@@ -595,7 +595,9 @@ class SessionManager:
                             "passed_count": ev.get("passed_count", 0),
                             "total_active_frequencies": ev.get("total_active_frequencies", 0),
                             "total_duration_seconds": ev.get("duration_seconds", 0.0),
+                            "fit_check_enabled": self.state.fit_check,
                             "fit_check_passed": self.state.fit_check_passed if self.state.fit_check_passed is not None else True,
+                            "vol_calib_enabled": self.state.vol_calib,
                             "vol_calib_passed": self.state.vol_calib_passed if self.state.vol_calib_passed is not None else True,
                             "frequencies": list(self.state.frequencies_done),
                         }

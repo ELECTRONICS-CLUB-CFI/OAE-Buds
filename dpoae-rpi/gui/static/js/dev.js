@@ -1,14 +1,36 @@
 /**
  * Developer / Lab Tab Controller:
- *  - FFT Spectrum Inspector (500 Hz - 6 kHz + f1, f2, 2f1-f2, noise floor markers)
- *  - Waveform Envelope & Clipping Panel + Pair WAV Player
- *  - Manual Tone & Loopback Bench Test (Live Hardware Only)
- *  - Parameter Overrides Form (Explicit Guard Checkbox)
- *  - Collapsible Ephemeral Live Telemetry & stderr Console
+ *  - Lazy Visible-Only Chart.js Initialization & In-Place chart.update("none")
+ *  - Decimated Waveform & Pre-Formatted {x, y} Spectrum Rendering
+ *  - Media Decoder Leak Prevention for <audio controls>
+ *  - Incremental DocumentFragment + rAF Batched Live Telemetry Console
  */
 
-import { store, notify, updateSettings, getEffectiveTheme } from "./store.js";
+import { store, notify, updateSettings, getEffectiveTheme, clearDevLogs } from "./store.js";
 import { escapeHtml } from "./dpgram_chart.js";
+
+function isDevPanelVisible() {
+  if (!store.settings.dev_mode || store.activeTab !== "dev") return false;
+  const panel = document.getElementById("panel-dev");
+  return Boolean(panel && !panel.classList.contains("hidden"));
+}
+
+function getClippedDpr() {
+  return Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 1.5);
+}
+
+function releaseAudioElement(audioEl) {
+  if (!audioEl) return;
+  try {
+    audioEl.pause();
+    if (audioEl.hasAttribute("src")) {
+      audioEl.removeAttribute("src");
+      audioEl.load();
+    }
+  } catch (_) {
+    // ignore media reset errors in headless/non-DOM envs
+  }
+}
 
 function destroyDevCanvasChart(canvasId) {
   const el = document.getElementById(canvasId);
@@ -68,6 +90,39 @@ const markerOverlayPlugin = {
   },
 };
 
+function decimateEnvelopePoints(mins, maxs, targetPoints = 400) {
+  const n = Math.min(Array.isArray(mins) ? mins.length : 0, Array.isArray(maxs) ? maxs.length : 0);
+  if (n === 0) return { minPts: [], maxPts: [] };
+  if (n <= targetPoints) {
+    const minPts = new Array(n);
+    const maxPts = new Array(n);
+    for (let i = 0; i < n; i += 1) {
+      minPts[i] = { x: i, y: Number(mins[i]) };
+      maxPts[i] = { x: i, y: Number(maxs[i]) };
+    }
+    return { minPts, maxPts };
+  }
+
+  const bucketSize = n / targetPoints;
+  const minPts = new Array(targetPoints);
+  const maxPts = new Array(targetPoints);
+  for (let b = 0; b < targetPoints; b += 1) {
+    const start = Math.floor(b * bucketSize);
+    const end = Math.min(n, Math.max(start + 1, Math.floor((b + 1) * bucketSize)));
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let j = start; j < end; j += 1) {
+      const vLo = Number(mins[j]);
+      const vHi = Number(maxs[j]);
+      if (vLo < lo) lo = vLo;
+      if (vHi > hi) hi = vHi;
+    }
+    minPts[b] = { x: b, y: lo };
+    maxPts[b] = { x: b, y: hi };
+  }
+  return { minPts, maxPts };
+}
+
 export async function fetchDevRuns() {
   if (!store.settings.dev_mode) return;
   try {
@@ -82,7 +137,7 @@ export async function fetchDevRuns() {
   } catch (err) {
     console.error("Failed to fetch dev runs:", err);
   }
-  notify();
+  notify("dev_metrics");
 }
 
 export async function loadDevSpectrum(filename) {
@@ -97,30 +152,173 @@ export async function loadDevSpectrum(filename) {
   } catch (err) {
     console.error("Failed to load dev spectrum:", err);
   }
-  notify();
+  notify("dev_metrics");
 }
 
+let lastRunsSelectKey = "";
+let lastPairMetaKey = "";
 let lastSpectrumRenderKey = "";
+
+function updateOrCreateFftChart(canvas, pts, markers, pair, colors) {
+  if (!canvas || typeof window.Chart === "undefined") return;
+  const existing = canvas._oaeChart;
+  if (existing) {
+    existing.data.datasets[0].data = pts;
+    existing.data.datasets[0].borderColor = colors.fftLineColor;
+    existing.options.plugins.oaeDevMarkers = {
+      markers,
+      noiseDb: Number(pair.noise_db),
+      noiseLineColor: colors.noiseLineColor,
+    };
+    existing.options.scales.x.title.color = colors.tickColor;
+    existing.options.scales.x.ticks.color = colors.tickColor;
+    existing.options.scales.x.grid.color = colors.gridColor;
+    existing.options.scales.y.title.color = colors.tickColor;
+    existing.options.scales.y.ticks.color = colors.tickColor;
+    existing.options.scales.y.grid.color = colors.gridColor;
+    existing.update("none");
+    return;
+  }
+
+  canvas._oaeChart = new window.Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: {
+      datasets: [
+        {
+          label: "FFT Magnitude (dB)",
+          data: pts,
+          borderColor: colors.fftLineColor,
+          borderWidth: 1.75,
+          tension: 0.05,
+          fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      parsing: false,
+      normalized: true,
+      devicePixelRatio: getClippedDpr(),
+      elements: {
+        point: { radius: 0, hitRadius: 4 },
+      },
+      plugins: {
+        legend: { display: false },
+        oaeDevMarkers: {
+          markers,
+          noiseDb: Number(pair.noise_db),
+          noiseLineColor: colors.noiseLineColor,
+        },
+      },
+      scales: {
+        x: {
+          type: "linear",
+          min: 500,
+          max: 6000,
+          title: { display: true, text: "Frequency (Hz)", color: colors.tickColor },
+          ticks: { color: colors.tickColor },
+          grid: { color: colors.gridColor },
+        },
+        y: {
+          title: { display: true, text: "Magnitude (dB)", color: colors.tickColor },
+          ticks: { color: colors.tickColor },
+          grid: { color: colors.gridColor },
+        },
+      },
+    },
+    plugins: [markerOverlayPlugin],
+  });
+}
+
+function updateOrCreateWaveChart(canvas, minPts, maxPts, colors) {
+  if (!canvas || typeof window.Chart === "undefined") return;
+  const maxX = Math.max(1, minPts.length - 1);
+  const existing = canvas._oaeChart;
+  if (existing) {
+    existing.data.datasets[0].data = minPts;
+    existing.data.datasets[0].borderColor = colors.waveColor;
+    existing.data.datasets[1].data = maxPts;
+    existing.data.datasets[1].borderColor = colors.waveColor;
+    existing.options.scales.x.max = maxX;
+    existing.options.scales.y.title.color = colors.tickColor;
+    existing.options.scales.y.ticks.color = colors.tickColor;
+    existing.options.scales.y.grid.color = colors.gridColor;
+    existing.update("none");
+    return;
+  }
+
+  canvas._oaeChart = new window.Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: {
+      datasets: [
+        {
+          label: "Min",
+          data: minPts,
+          borderColor: colors.waveColor,
+          borderWidth: 1,
+          fill: false,
+        },
+        {
+          label: "Max",
+          data: maxPts,
+          borderColor: colors.waveColor,
+          borderWidth: 1,
+          fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      parsing: false,
+      normalized: true,
+      devicePixelRatio: getClippedDpr(),
+      elements: {
+        point: { radius: 0, hitRadius: 4 },
+      },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          type: "linear",
+          min: 0,
+          max: maxX,
+          display: false,
+        },
+        y: {
+          suggestedMin: -1000,
+          suggestedMax: 1000,
+          title: { display: true, text: "PCM Amplitude", color: colors.tickColor },
+          ticks: { color: colors.tickColor },
+          grid: { color: colors.gridColor },
+        },
+      },
+    },
+  });
+}
 
 function renderSpectrumAndWaveform() {
   const data = store.dev.spectrumData;
   const runSelect = document.getElementById("dev-run-select");
   if (runSelect) {
     const runs = store.dev.runs || [];
-    const optionsHtml = runs.length
-      ? runs
-          .map(
-            (r) =>
-              `<option value="${escapeHtml(r.filename)}">${escapeHtml(r.patient_id)} (${escapeHtml(
-                String(r.ear || "").toUpperCase()
-              )}) — ${escapeHtml(r.filename)}</option>`
-          )
-          .join("")
-      : '<option value="">No --dev-telemetry runs recorded yet</option>';
-    if (runSelect.innerHTML !== optionsHtml) {
-      runSelect.innerHTML = optionsHtml;
+    const selectKey = runs.map((r) => r.filename).join("|");
+    if (selectKey !== lastRunsSelectKey) {
+      lastRunsSelectKey = selectKey;
+      runSelect.innerHTML = runs.length
+        ? runs
+            .map(
+              (r) =>
+                `<option value="${escapeHtml(r.filename)}">${escapeHtml(r.patient_id)} (${escapeHtml(
+                  String(r.ear || "").toUpperCase()
+                )}) — ${escapeHtml(r.filename)}</option>`
+            )
+            .join("")
+        : '<option value="">No --dev-telemetry runs recorded yet</option>';
     }
-    if (store.dev.selectedRunFilename) {
+    if (store.dev.selectedRunFilename && runSelect.value !== store.dev.selectedRunFilename) {
       runSelect.value = store.dev.selectedRunFilename;
     }
   }
@@ -132,13 +330,16 @@ function renderSpectrumAndWaveform() {
 
   const pairs = data?.pairs || [];
   if (!pairs.length) {
-    if (pairTabs) pairTabs.innerHTML = "";
-    if (metricsEl) {
-      metricsEl.innerHTML =
-        '<p class="muted">Run a screening while Developer Mode is active to inspect FFT spectra, waveform envelopes, and clipping metrics.</p>';
+    if (lastPairMetaKey !== "empty") {
+      lastPairMetaKey = "empty";
+      if (pairTabs) pairTabs.innerHTML = "";
+      if (metricsEl) {
+        metricsEl.innerHTML =
+          '<p class="muted">Run a screening while Developer Mode is active to inspect FFT spectra, waveform envelopes, and clipping metrics.</p>';
+      }
+      releaseAudioElement(wavAudio);
+      if (wavLink) wavLink.classList.add("hidden");
     }
-    if (wavAudio) wavAudio.removeAttribute("src");
-    if (wavLink) wavLink.classList.add("hidden");
     destroyDevCanvasChart("dev-fft-canvas");
     destroyDevCanvasChart("dev-wave-canvas");
     lastSpectrumRenderKey = "";
@@ -147,49 +348,52 @@ function renderSpectrumAndWaveform() {
 
   const idx = Math.min(Math.max(0, store.dev.selectedPairIndex || 0), pairs.length - 1);
   const pair = pairs[idx];
-
-  if (pairTabs) {
-    pairTabs.innerHTML = pairs
-      .map(
-        (p, i) =>
-          `<button type="button" class="btn btn-sm ${i === idx ? "btn-primary" : "btn-outline"} dev-pair-btn" data-idx="${i}">Pair ${
-            p.pair_index
-          }: ${p.f2} Hz</button>`
-      )
-      .join("");
-    pairTabs.querySelectorAll(".dev-pair-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        store.dev.selectedPairIndex = Number(btn.dataset.idx);
-        notify();
-      });
-    });
-  }
-
-  if (metricsEl) {
-    const clipBadge =
-      Number(pair.clipped_samples || 0) > 0
-        ? `<span class="badge badge-danger">${pair.clipped_samples} Clipped</span>`
-        : `<span class="badge badge-success">0 Clipped</span>`;
-    metricsEl.innerHTML = `
-      <span class="badge badge-info">Peak: ${Number(pair.peak_dbfs).toFixed(1)} dBFS</span>
-      <span class="badge badge-neutral">RMS: ${Number(pair.rms_dbfs).toFixed(1)} dBFS</span>
-      ${clipBadge}
-      <span class="badge badge-neutral">Signal: ${Number(pair.signal_db).toFixed(1)} dB | SNR: ${Number(pair.snr_db).toFixed(1)} dB</span>
-    `;
-  }
-
-  const wavFilename = pair.wav_file ? String(pair.wav_file).split("/").pop() : "";
-  if (wavFilename && wavAudio && wavLink) {
-    const wavUrl = `/api/dev/wav/${encodeURIComponent(wavFilename)}`;
-    if (wavAudio.getAttribute("src") !== wavUrl) {
-      wavAudio.setAttribute("src", wavUrl);
+  const pairMetaKey = `${store.dev.selectedRunFilename}:${idx}:${pairs.length}:${pair.wav_file || ""}`;
+  if (pairMetaKey !== lastPairMetaKey) {
+    lastPairMetaKey = pairMetaKey;
+    if (pairTabs) {
+      pairTabs.innerHTML = pairs
+        .map(
+          (p, i) =>
+            `<button type="button" class="btn btn-sm ${i === idx ? "btn-primary" : "btn-outline"} dev-pair-btn" data-idx="${i}">Pair ${
+              p.pair_index
+            }: ${p.f2} Hz</button>`
+        )
+        .join("");
     }
-    wavLink.href = wavUrl;
-    wavLink.download = wavFilename;
-    wavLink.classList.remove("hidden");
-  } else if (wavAudio && wavLink) {
-    wavAudio.removeAttribute("src");
-    wavLink.classList.add("hidden");
+
+    if (metricsEl) {
+      const clipBadge =
+        Number(pair.clipped_samples || 0) > 0
+          ? `<span class="badge badge-danger">${pair.clipped_samples} Clipped</span>`
+          : `<span class="badge badge-success">0 Clipped</span>`;
+      metricsEl.innerHTML = `
+        <span class="badge badge-info">Peak: ${Number(pair.peak_dbfs).toFixed(1)} dBFS</span>
+        <span class="badge badge-neutral">RMS: ${Number(pair.rms_dbfs).toFixed(1)} dBFS</span>
+        ${clipBadge}
+        <span class="badge badge-neutral">Signal: ${Number(pair.signal_db).toFixed(1)} dB | SNR: ${Number(pair.snr_db).toFixed(1)} dB</span>
+      `;
+    }
+
+    const wavFilename = pair.wav_file ? String(pair.wav_file).split("/").pop() : "";
+    if (wavFilename && wavAudio && wavLink) {
+      const wavUrl = `/api/dev/wav/${encodeURIComponent(wavFilename)}`;
+      if (wavAudio.getAttribute("src") !== wavUrl) {
+        releaseAudioElement(wavAudio);
+        wavAudio.setAttribute("src", wavUrl);
+      }
+      wavLink.href = wavUrl;
+      wavLink.download = wavFilename;
+      wavLink.classList.remove("hidden");
+    } else if (wavAudio && wavLink) {
+      releaseAudioElement(wavAudio);
+      wavLink.classList.add("hidden");
+    }
+  }
+
+  // Lazy chart initialization: never instantiate charts while #panel-dev is hidden (display: none)
+  if (!isDevPanelVisible()) {
+    return;
   }
 
   const theme = getEffectiveTheme();
@@ -198,130 +402,36 @@ function renderSpectrumAndWaveform() {
   lastSpectrumRenderKey = renderKey;
 
   const isDark = theme === "dark";
-  const gridColor = isDark ? "#334155" : "#e2e8f0";
-  const tickColor = isDark ? "#cbd5e1" : "#334155";
-  const fftLineColor = isDark ? "#2dd4bf" : "#0f766e";
-  const waveColor = isDark ? "#38bdf8" : "#0369a1";
-  const waveFill = isDark ? "rgba(56, 189, 248, 0.25)" : "rgba(3, 105, 161, 0.2)";
+  const colors = {
+    gridColor: isDark ? "#334155" : "#e2e8f0",
+    tickColor: isDark ? "#cbd5e1" : "#334155",
+    fftLineColor: isDark ? "#2dd4bf" : "#0f766e",
+    waveColor: isDark ? "#38bdf8" : "#0369a1",
+    noiseLineColor: isDark ? "#94a3b8" : "#64748b",
+  };
 
-  // 1. FFT Spectrum Chart
-  destroyDevCanvasChart("dev-fft-canvas");
   const fftCanvas = document.getElementById("dev-fft-canvas");
-  if (fftCanvas && typeof window.Chart !== "undefined" && pair.spectrum) {
+  if (fftCanvas && pair.spectrum) {
     const freqs = pair.spectrum.freqs_hz || [];
     const mags = pair.spectrum.magnitudes_db || [];
-    const pts = freqs.map((hz, i) => ({ x: hz, y: mags[i] }));
-
+    const pts = freqs.map((hz, i) => ({ x: Number(hz), y: Number(mags[i]) }));
     const markers = [
       { hz: Number(pair.oae_bin), label: `2f1-f2 (${pair.oae_bin})`, color: isDark ? "#4ade80" : "#15803d", yOffset: 12 },
       { hz: Number(pair.f1), label: `f1 (${pair.f1})`, color: isDark ? "#fbbf24" : "#b45309", yOffset: 26 },
       { hz: Number(pair.f2), label: `f2 (${pair.f2})`, color: isDark ? "#38bdf8" : "#0369a1", yOffset: 12 },
       { hz: Number(pair.imd_bin), label: `IMD (${pair.imd_bin})`, color: isDark ? "#f87171" : "#b91c1c", yOffset: 26 },
     ];
-
-    const chart = new window.Chart(fftCanvas.getContext("2d"), {
-      type: "line",
-      data: {
-        datasets: [
-          {
-            label: "FFT Magnitude (dB)",
-            data: pts,
-            borderColor: fftLineColor,
-            borderWidth: 1.75,
-            pointRadius: 0,
-            tension: 0.05,
-            fill: false,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        parsing: false,
-        plugins: {
-          legend: { display: false },
-          oaeDevMarkers: {
-            markers,
-            noiseDb: Number(pair.noise_db),
-            noiseLineColor: isDark ? "#94a3b8" : "#64748b",
-          },
-        },
-        scales: {
-          x: {
-            type: "linear",
-            min: 500,
-            max: 6000,
-            title: { display: true, text: "Frequency (Hz)", color: tickColor },
-            ticks: { color: tickColor },
-            grid: { color: gridColor },
-          },
-          y: {
-            title: { display: true, text: "Magnitude (dB)", color: tickColor },
-            ticks: { color: tickColor },
-            grid: { color: gridColor },
-          },
-        },
-      },
-      plugins: [markerOverlayPlugin],
-    });
-    // Store reference in dpgram registry via a local map if needed; destroyChart uses chartRegistry,
-    // so track via Chart.getChart when available:
-    fftCanvas._oaeChart = chart;
+    updateOrCreateFftChart(fftCanvas, pts, markers, pair, colors);
   }
 
-  // 2. Waveform Min/Max Envelope Chart
-  destroyDevCanvasChart("dev-wave-canvas");
   const waveCanvas = document.getElementById("dev-wave-canvas");
-  if (waveCanvas && typeof window.Chart !== "undefined" && pair.waveform) {
-    const mins = pair.waveform.min || [];
-    const maxs = pair.waveform.max || [];
-    const labels = mins.map((_, i) => i);
-
-    const wChart = new window.Chart(waveCanvas.getContext("2d"), {
-      type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "Min",
-            data: mins,
-            borderColor: waveColor,
-            borderWidth: 1,
-            pointRadius: 0,
-            fill: false,
-          },
-          {
-            label: "Max",
-            data: maxs,
-            borderColor: waveColor,
-            backgroundColor: waveFill,
-            borderWidth: 1,
-            pointRadius: 0,
-            fill: "-1",
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { display: false },
-          y: {
-            suggestedMin: -1000,
-            suggestedMax: 1000,
-            title: { display: true, text: "PCM Amplitude", color: tickColor },
-            ticks: { color: tickColor },
-            grid: { color: gridColor },
-          },
-        },
-      },
-    });
-    waveCanvas._oaeChart = wChart;
+  if (waveCanvas && pair.waveform) {
+    const { minPts, maxPts } = decimateEnvelopePoints(pair.waveform.min, pair.waveform.max, 400);
+    updateOrCreateWaveChart(waveCanvas, minPts, maxPts, colors);
   }
 }
+
+let lastRenderedToneKey = "";
 
 function renderToneTestPanel() {
   const hwWarn = document.getElementById("dev-tone-hw-warn");
@@ -342,33 +452,46 @@ function renderToneTestPanel() {
     errBox.textContent = store.dev.toneTestError || "";
   }
 
+  if (!resBox) return;
   const res = store.dev.toneTestResult;
-  if (resBox) {
-    if (!res) {
-      resBox.classList.add("hidden");
-    } else {
-      resBox.classList.remove("hidden");
-      const wavUrl = res.wav_filename ? `/api/dev/wav/${encodeURIComponent(res.wav_filename)}` : "";
-      resBox.innerHTML = `
-        <div class="dev-metrics-row" style="margin-bottom:0.65rem;">
-          <span class="badge badge-info">Peak Freq: ${Number(res.measured_peak_hz).toFixed(1)} Hz</span>
-          <span class="badge badge-neutral">RMS: ${Number(res.rms_dbfs).toFixed(1)} dBFS</span>
-          <span class="badge badge-neutral">Peak: ${Number(res.peak_dbfs).toFixed(1)} dBFS</span>
-          <span class="badge ${res.clipped_samples > 0 ? "badge-danger" : "badge-success"}">${res.clipped_samples} Clipped</span>
-          <span class="badge badge-neutral">Latency: ${Number(res.latency_ms).toFixed(1)} ms</span>
-          <span class="badge badge-neutral">Amp Applied: ${Number(res.amplitude_applied).toFixed(2)}</span>
-        </div>
-        ${
-          wavUrl
-            ? `<div class="wav-player-row">
-                 <audio controls src="${wavUrl}"></audio>
-                 <a class="btn btn-outline btn-sm" href="${wavUrl}" download="${escapeHtml(res.wav_filename)}">Download WAV</a>
-               </div>`
-            : ""
-        }
-      `;
-    }
+  const toneKey = res
+    ? `${res.wav_filename || ""}:${res.measured_peak_hz}:${res.rms_dbfs}:${res.latency_ms}:${res.amplitude_applied}`
+    : "";
+
+  if (toneKey === lastRenderedToneKey) {
+    return;
   }
+  lastRenderedToneKey = toneKey;
+
+  // Release any previous <audio> media decoder resources before changing or clearing DOM
+  releaseAudioElement(resBox.querySelector("audio"));
+
+  if (!res) {
+    resBox.classList.add("hidden");
+    resBox.innerHTML = "";
+    return;
+  }
+
+  resBox.classList.remove("hidden");
+  const wavUrl = res.wav_filename ? `/api/dev/wav/${encodeURIComponent(res.wav_filename)}` : "";
+  resBox.innerHTML = `
+    <div class="dev-metrics-row" style="margin-bottom:0.65rem;">
+      <span class="badge badge-info">Peak Freq: ${Number(res.measured_peak_hz).toFixed(1)} Hz</span>
+      <span class="badge badge-neutral">RMS: ${Number(res.rms_dbfs).toFixed(1)} dBFS</span>
+      <span class="badge badge-neutral">Peak: ${Number(res.peak_dbfs).toFixed(1)} dBFS</span>
+      <span class="badge ${res.clipped_samples > 0 ? "badge-danger" : "badge-success"}">${res.clipped_samples} Clipped</span>
+      <span class="badge badge-neutral">Latency: ${Number(res.latency_ms).toFixed(1)} ms</span>
+      <span class="badge badge-neutral">Amp Applied: ${Number(res.amplitude_applied).toFixed(2)}</span>
+    </div>
+    ${
+      wavUrl
+        ? `<div class="wav-player-row">
+             <audio controls src="${wavUrl}"></audio>
+             <a class="btn btn-outline btn-sm" href="${wavUrl}" download="${escapeHtml(res.wav_filename)}">Download WAV</a>
+           </div>`
+        : ""
+    }
+  `;
 }
 
 function renderOverridesForm() {
@@ -392,18 +515,70 @@ function renderOverridesForm() {
   }
 }
 
+let lastRenderedLogSeq = 0;
+let lastLogResetCount = -1;
+let consoleRafId = null;
+
+function flushConsoleDrawerFrame() {
+  consoleRafId = null;
+  if (!store.dev.consoleOpen) return;
+
+  const logEl = document.getElementById("dev-console-log");
+  if (!logEl) return;
+
+  const logs = store.dev.consoleLogs || [];
+  if (store.dev.logResetCount !== lastLogResetCount) {
+    lastLogResetCount = store.dev.logResetCount;
+    lastRenderedLogSeq = 0;
+    logEl.textContent = "";
+  }
+
+  if (!logs.length) {
+    if (!logEl.dataset.empty) {
+      logEl.textContent = "No live telemetry events logged in this browser session yet.";
+      logEl.dataset.empty = "1";
+    }
+    return;
+  }
+
+  if (logEl.dataset.empty) {
+    logEl.textContent = "";
+    delete logEl.dataset.empty;
+  }
+
+  const fragment = document.createDocumentFragment();
+  let appended = 0;
+  for (let i = 0; i < logs.length; i += 1) {
+    const entry = logs[i];
+    if (entry.seq <= lastRenderedLogSeq) continue;
+    const row = document.createElement("div");
+    row.textContent = `[${entry.ts}] [${entry.kind}] ${entry.text}`;
+    fragment.appendChild(row);
+    lastRenderedLogSeq = entry.seq;
+    appended += 1;
+  }
+
+  if (appended > 0) {
+    logEl.appendChild(fragment);
+    while (logEl.childElementCount > 300 && logEl.firstChild) {
+      logEl.removeChild(logEl.firstChild);
+    }
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+}
+
 function renderConsoleDrawer() {
   const body = document.getElementById("dev-console-body");
   const toggleBtn = document.getElementById("btn-toggle-console");
-  const logEl = document.getElementById("dev-console-log");
   if (body) body.classList.toggle("hidden", !store.dev.consoleOpen);
   if (toggleBtn) toggleBtn.textContent = store.dev.consoleOpen ? "Hide Console" : "Show Console";
-  if (logEl) {
-    const lines = store.dev.consoleLogs || [];
-    logEl.textContent = lines.length
-      ? lines.map((l) => `[${l.ts}] [${l.kind}] ${l.text}`).join("\n")
-      : "No live telemetry events logged in this browser session yet.";
-    logEl.scrollTop = logEl.scrollHeight;
+
+  if (!store.dev.consoleOpen) {
+    return;
+  }
+
+  if (consoleRafId === null) {
+    consoleRafId = requestAnimationFrame(flushConsoleDrawerFrame);
   }
 }
 
@@ -421,18 +596,20 @@ export function initDev() {
     if (e.target.value) loadDevSpectrum(e.target.value);
   });
 
-  // Cleanup Chart.js instances cleanly on canvas
-  const origDestroy = window.Chart?.getChart;
-  if (typeof origDestroy === "function") {
-    // Chart.js v4 automatically associates chart with canvas via Chart.getChart
-  }
+  // Single delegated listener for pair selection tabs
+  document.getElementById("dev-pair-tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".dev-pair-btn");
+    if (!btn) return;
+    store.dev.selectedPairIndex = Number(btn.dataset.idx);
+    notify("dev_metrics");
+  });
 
   // Tone Test Form
   document.getElementById("dev-tone-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     store.dev.toneTestBusy = true;
     store.dev.toneTestError = null;
-    notify();
+    notify("dev_tone");
 
     const channel = document.getElementById("tone-channel").value;
     const freqHz = Number(document.getElementById("tone-freq").value);
@@ -462,7 +639,7 @@ export function initDev() {
       store.dev.toneTestError = err.message;
     } finally {
       store.dev.toneTestBusy = false;
-      notify();
+      notify("dev_tone");
     }
   });
 
@@ -495,21 +672,14 @@ export function initDev() {
   // Console Drawer
   document.getElementById("btn-toggle-console").addEventListener("click", () => {
     store.dev.consoleOpen = !store.dev.consoleOpen;
-    notify();
+    notify("dev_logs");
   });
   document.getElementById("btn-clear-console").addEventListener("click", () => {
-    store.dev.consoleLogs = [];
-    notify();
+    clearDevLogs();
+    notify("dev_logs");
   });
 }
 
 export function clearDevChartsBeforeThemeSwap() {
   lastSpectrumRenderKey = "";
-  ["dev-fft-canvas", "dev-wave-canvas"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (el && el._oaeChart) {
-      el._oaeChart.destroy();
-      el._oaeChart = null;
-    }
-  });
 }

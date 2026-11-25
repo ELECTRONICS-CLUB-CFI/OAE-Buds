@@ -5,6 +5,9 @@
 import { store, updateSettings, hydrateFromServer } from "./store.js";
 import { escapeHtml } from "./dpgram_chart.js";
 
+let lastProfilesKey = "";
+let lastAudioKey = "";
+
 export function renderSettings() {
   const themeSelect = document.getElementById("setting-theme");
   if (themeSelect) {
@@ -14,7 +17,9 @@ export function renderSettings() {
   const profileSelect = document.getElementById("setting-profile");
   if (profileSelect) {
     const profiles = store.config.profiles || [];
-    if (profileSelect.options.length !== profiles.length) {
+    const profilesKey = profiles.map((p) => `${p.name}:${p.description}`).join("|");
+    if (profilesKey !== lastProfilesKey) {
+      lastProfilesKey = profilesKey;
       profileSelect.innerHTML = profiles
         .map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)} — ${escapeHtml(p.description)}</option>`)
         .join("");
@@ -34,6 +39,12 @@ export function renderSettings() {
   const hwBox = document.getElementById("hw-status-box");
   if (hwBox) {
     const dev = store.audioDevice;
+    const audioKey = JSON.stringify(dev);
+    if (audioKey === lastAudioKey) {
+      return;
+    }
+    lastAudioKey = audioKey;
+
     const rawList = (dev.raw_cards || []).map((c) => `<li>${escapeHtml(c)}</li>`).join("");
     if (dev.connected) {
       hwBox.innerHTML = `

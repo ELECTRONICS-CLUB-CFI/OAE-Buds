@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 import uuid
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,7 +52,7 @@ class SessionState:
     final_elapsed_seconds: float = 0.0
 
     frequencies_done: list[dict[str, Any]] = field(default_factory=list)
-    latest_dev_metrics: list[dict[str, Any]] = field(default_factory=list)
+    latest_dev_metrics: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=16))
     fit_check_passed: bool | None = None
     vol_calib_passed: bool | None = None
     left_result: dict[str, Any] | None = None
@@ -351,8 +352,9 @@ class SessionManager:
             stdout_bytes, stderr_bytes = await proc.communicate()
             stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
             if stderr_text:
-                for line in stderr_text.splitlines():
-                    await self._broadcast({"event": "stderr", "line": line})
+                stderr_lines = [line for line in stderr_text.splitlines() if line]
+                if stderr_lines:
+                    await self._broadcast({"event": "stderr_batch", "lines": stderr_lines})
 
             result_ev: dict[str, Any] | None = None
             for raw_line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
@@ -454,8 +456,27 @@ class SessionManager:
     ) -> None:
         if stream is None:
             return
+        pending: list[str] = []
+        last_flush = time.monotonic()
+
+        async def flush() -> None:
+            nonlocal last_flush
+            if pending and emit_dev_logs:
+                await self._broadcast({"event": "stderr_batch", "lines": list(pending)})
+            pending.clear()
+            last_flush = time.monotonic()
+
         while True:
-            raw_line = await stream.readline()
+            if pending:
+                remaining = max(0.01, 0.2 - (time.monotonic() - last_flush))
+                try:
+                    raw_line = await asyncio.wait_for(stream.readline(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    await flush()
+                    continue
+            else:
+                raw_line = await stream.readline()
+
             if not raw_line:
                 break
             line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
@@ -463,7 +484,14 @@ class SessionManager:
                 continue
             collected.append(line)
             if emit_dev_logs:
-                await self._broadcast({"event": "stderr", "line": line})
+                if not pending:
+                    last_flush = time.monotonic()
+                pending.append(line)
+                if len(pending) >= 25 or (time.monotonic() - last_flush) >= 0.2:
+                    await flush()
+
+        if pending:
+            await flush()
 
     async def _supervise_process(
         self,
@@ -528,7 +556,15 @@ class SessionManager:
                     await self._broadcast(ev)
 
                 elif event_name == "dev_telemetry":
-                    self.state.latest_dev_metrics.append(ev)
+                    compact_dev = {
+                        "pair_index": ev.get("pair_index"),
+                        "f1": ev.get("f1"),
+                        "f2": ev.get("f2"),
+                        "peak_dbfs": ev.get("peak_dbfs"),
+                        "rms_dbfs": ev.get("rms_dbfs"),
+                        "clipped_samples": ev.get("clipped_samples"),
+                    }
+                    self.state.latest_dev_metrics.append(compact_dev)
                     await self._broadcast(ev)
 
                 elif event_name == "artifact_status":

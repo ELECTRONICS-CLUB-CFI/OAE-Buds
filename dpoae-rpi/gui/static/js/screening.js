@@ -2,7 +2,15 @@
  * Screening Controller: Setup, Guided Bilateral Flow, SSE Telemetry, Elapsed Timer, & Results
  */
 
-import { store, notify, updateSettings, hydrateFromServer, getEffectiveTheme, appendDevLog } from "./store.js";
+import {
+  store,
+  notify,
+  updateSettings,
+  hydrateFromServer,
+  getEffectiveTheme,
+  appendDevLog,
+  appendDevLogs,
+} from "./store.js";
 import { buildEarCardHtml, destroyChart, escapeHtml, renderDpGramChart } from "./dpgram_chart.js";
 import { fetchDevRuns, loadDevSpectrum } from "./dev.js";
 
@@ -47,14 +55,41 @@ function handleTelemetryEvent(ev) {
   if (!ev || !ev.event) return;
   const s = store.activeSession;
 
-  if (store.settings.dev_mode && ev.event !== "sync") {
-    if (ev.event === "cmd") {
-      appendDevLog("CMD", (ev.argv || []).join(" "));
-    } else if (ev.event === "stderr") {
-      appendDevLog("STDERR", ev.line || "");
-    } else {
-      appendDevLog(ev.event.toUpperCase(), JSON.stringify(ev));
+  if (ev.event === "stderr_batch" && Array.isArray(ev.lines)) {
+    if (store.settings.dev_mode) {
+      appendDevLogs("STDERR", ev.lines);
+      notify("dev_logs");
     }
+    return;
+  }
+
+  if (ev.event === "stderr") {
+    if (store.settings.dev_mode) {
+      appendDevLog("STDERR", ev.line || "");
+      notify("dev_logs");
+    }
+    return;
+  }
+
+  if (ev.event === "cmd") {
+    if (store.settings.dev_mode) {
+      appendDevLog("CMD", (ev.argv || []).join(" "));
+      notify("dev_logs");
+    }
+    return;
+  }
+
+  if (ev.event === "dev_telemetry") {
+    if (store.settings.dev_mode) {
+      appendDevLog("DEV_TELEMETRY", JSON.stringify(ev));
+      notify("dev_logs");
+    }
+    return;
+  }
+
+  if (store.settings.dev_mode && ev.event !== "sync") {
+    appendDevLog(ev.event.toUpperCase(), JSON.stringify(ev));
+    notify("dev_logs");
   }
 
   switch (ev.event) {
@@ -111,7 +146,11 @@ function handleTelemetryEvent(ev) {
       if (ev.dev_filename) {
         s.dev_file = ev.dev_filename;
         if (store.settings.dev_mode) {
-          fetchDevRuns().then(() => loadDevSpectrum(ev.dev_filename));
+          if (store.activeTab === "dev") {
+            fetchDevRuns().then(() => loadDevSpectrum(ev.dev_filename));
+          } else {
+            store.dev.pendingRunFilename = ev.dev_filename;
+          }
         }
       }
       if (s.workflow === "bilateral" && ev.ear === "left" && !s.right_result) {
@@ -146,7 +185,7 @@ function handleTelemetryEvent(ev) {
       break;
   }
 
-  notify();
+  notify("session");
 }
 
 export function connectTelemetry() {
@@ -157,8 +196,12 @@ export function connectTelemetry() {
   eventSource = new EventSource(url);
 
   eventSource.onopen = () => {
+    const wasConnected = store.sseConnected;
     store.sseConnected = true;
-    notify();
+    if (!wasConnected) {
+      notify("ui");
+      hydrateFromServer();
+    }
   };
 
   eventSource.onmessage = (msg) => {
@@ -173,8 +216,10 @@ export function connectTelemetry() {
   };
 
   eventSource.onerror = () => {
-    store.sseConnected = false;
-    notify();
+    if (store.sseConnected) {
+      store.sseConnected = false;
+      notify("ui");
+    }
   };
 }
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ class RecordsManager:
 
     def __init__(self, results_dir: Path) -> None:
         self.results_dir = results_dir
+        self._records_index: dict[str, tuple[int, dict[str, Any]]] = {}
+        self._dev_runs_index: dict[str, tuple[int, dict[str, Any]]] = {}
 
     def _safe_resolve(self, filename: str, required_suffix: str = ".json") -> Path:
         if (
@@ -70,29 +73,54 @@ class RecordsManager:
     def list_dev_runs(self, limit: int = 30) -> list[dict[str, Any]]:
         """List available -dev.json telemetry sidecar files sorted newest first."""
         if not self.results_dir.exists():
+            self._dev_runs_index.clear()
             return []
 
+        seen_files: set[str] = set()
         runs: list[dict[str, Any]] = []
-        for path in self.results_dir.glob("*-dev.json"):
-            if not path.is_file():
+        try:
+            entries = list(os.scandir(self.results_dir))
+        except OSError:
+            return []
+
+        for dir_entry in entries:
+            name = dir_entry.name
+            if not name.endswith("-dev.json") or not dir_entry.is_file():
                 continue
+            seen_files.add(name)
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                st = dir_entry.stat()
+                mtime_ns = st.st_mtime_ns
+            except OSError:
+                continue
+
+            cached = self._dev_runs_index.get(name)
+            if cached is not None and cached[0] == mtime_ns:
+                runs.append(cached[1])
+                continue
+
+            try:
+                data = json.loads(Path(dir_entry.path).read_text(encoding="utf-8"))
                 if not isinstance(data, dict):
                     continue
             except (OSError, json.JSONDecodeError):
                 continue
 
-            mtime_ms = int(path.stat().st_mtime * 1000)
-            runs.append({
-                "filename": path.name,
+            summary = {
+                "filename": name,
                 "session_id": str(data.get("session_id", "")),
                 "patient_id": str(data.get("patient_id", "0")),
                 "ear": str(data.get("ear", "left")),
                 "sample_rate": int(data.get("sample_rate", 48000)),
                 "pair_count": len(data.get("pairs", [])),
-                "timestamp_ms": mtime_ms,
-            })
+                "timestamp_ms": int(mtime_ns // 1_000_000),
+            }
+            self._dev_runs_index[name] = (mtime_ns, summary)
+            runs.append(summary)
+
+        for stale in list(self._dev_runs_index):
+            if stale not in seen_files:
+                del self._dev_runs_index[stale]
 
         runs.sort(key=lambda r: r["timestamp_ms"], reverse=True)
         return runs[: max(1, limit)]
@@ -106,23 +134,63 @@ class RecordsManager:
     ) -> list[dict[str, Any]]:
         """List stored sessions, grouping bilateral left/right files by shared session_id."""
         if not self.results_dir.exists():
+            self._records_index.clear()
             return []
 
+        seen_files: set[str] = set()
         raw_entries: list[dict[str, Any]] = []
-        for path in self.results_dir.glob("*.json"):
-            if not path.is_file() or path.name.endswith("-dev.json"):
+        try:
+            entries = list(os.scandir(self.results_dir))
+        except OSError:
+            return []
+
+        for dir_entry in entries:
+            name = dir_entry.name
+            if not name.endswith(".json") or name.endswith("-dev.json") or not dir_entry.is_file():
                 continue
+            seen_files.add(name)
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                st = dir_entry.stat()
+                mtime_ns = st.st_mtime_ns
+            except OSError:
+                continue
+
+            cached = self._records_index.get(name)
+            if cached is not None and cached[0] == mtime_ns:
+                raw_entries.append(cached[1])
+                continue
+
+            try:
+                data = json.loads(Path(dir_entry.path).read_text(encoding="utf-8"))
                 if not isinstance(data, dict):
                     continue
             except (OSError, json.JSONDecodeError):
                 continue
 
-            data["filename"] = path.name
-            if not data.get("timestamp_ms"):
-                data["timestamp_ms"] = int(path.stat().st_mtime * 1000)
-            raw_entries.append(data)
+            compact_entry = {
+                "filename": name,
+                "session_id": data.get("session_id"),
+                "patient_id": data.get("patient_id", "0"),
+                "notes": data.get("notes", ""),
+                "profile": data.get("profile", ""),
+                "ear": data.get("ear", "left"),
+                "verdict": data.get("verdict", "Refer"),
+                "passed_count": data.get("passed_count", 0),
+                "total_active_frequencies": data.get("total_active_frequencies", 0),
+                "noise_check": data.get("noise_check", "noise-pass"),
+                "fit_check_passed": data.get("fit_check_passed", True),
+                "vol_calib_passed": data.get("vol_calib_passed", True),
+                "total_duration_seconds": data.get("total_duration_seconds", 0.0),
+                "timestamp": data.get("timestamp", ""),
+                "timestamp_ms": data.get("timestamp_ms") or int(mtime_ns // 1_000_000),
+                "frequencies": data.get("frequencies", []),
+            }
+            self._records_index[name] = (mtime_ns, compact_entry)
+            raw_entries.append(compact_entry)
+
+        for stale in list(self._records_index):
+            if stale not in seen_files:
+                del self._records_index[stale]
 
         # Group by session_id when non-empty; otherwise treat each file as its own group
         groups: dict[str, dict[str, Any]] = {}

@@ -102,6 +102,7 @@ export function renderDpGramChart(canvasId, frequencies, snrThresholdDb = 7.0) {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      devicePixelRatio: Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 1.5),
       plugins: {
         legend: {
           position: "bottom",

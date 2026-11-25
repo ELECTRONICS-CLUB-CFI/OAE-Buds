@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -119,22 +118,20 @@ def create_app(
                 }
                 yield f"data: {json.dumps(initial_payload)}\n\n"
 
-                last_keepalive = time.monotonic()
-                while not session_mgr.is_shutting_down:
-                    if await request.is_disconnected():
-                        break
-                    try:
-                        event = await asyncio.wait_for(queue.get(), timeout=0.5)
-                        if event is None:
+                try:
+                    while not session_mgr.is_shutting_down:
+                        if await request.is_disconnected():
                             break
-                        yield f"data: {json.dumps(event)}\n\n"
-                        last_keepalive = time.monotonic()
-                    except asyncio.TimeoutError:
-                        now = time.monotonic()
-                        if now - last_keepalive >= 15.0:
-                            # SSE comment keeps mobile proxies/connections alive
+                        try:
+                            event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                            if event is None:
+                                break
+                            yield f"data: {json.dumps(event)}\n\n"
+                        except asyncio.TimeoutError:
+                            # SSE comment keeps mobile proxies alive and probes dead sockets
                             yield ": keep-alive\n\n"
-                            last_keepalive = now
+                except asyncio.CancelledError:
+                    return
 
         return StreamingResponse(
             event_generator(),

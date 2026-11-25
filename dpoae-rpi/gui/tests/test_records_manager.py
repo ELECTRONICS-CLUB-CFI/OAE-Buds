@@ -104,3 +104,49 @@ def test_get_record_valid_missing_and_traversal(tmp_path: Path) -> None:
     for bad_name in ("../secret.json", "../../etc/passwd", "sub/valid.json", "notes.txt", ""):
         with pytest.raises(InvalidRecordPathError):
             mgr.get_record(bad_name)
+
+
+def test_list_records_and_dev_runs_mtime_cache_invalidation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_record(
+        tmp_path,
+        "p_cache-left-1000.json",
+        {"patient_id": "cache_01", "ear": "left", "verdict": "Pass", "timestamp_ms": 1000},
+    )
+    _write_record(
+        tmp_path,
+        "p_cache-left-1000-dev.json",
+        {"patient_id": "cache_01", "ear": "left", "pairs": [{"pair_index": 1}]},
+    )
+
+    mgr = RecordsManager(tmp_path)
+    assert len(mgr.list_records()) == 1
+    assert len(mgr.list_dev_runs()) == 1
+
+    # Second call with unchanged mtimes must reuse cached entries without reading files again
+    orig_read_text = Path.read_text
+
+    def fail_if_called(self: Path, *args, **kwargs):
+        raise AssertionError(f"Unexpected file read on cached mtime: {self}")
+
+    monkeypatch.setattr(Path, "read_text", fail_if_called)
+    assert len(mgr.list_records()) == 1
+    assert len(mgr.list_dev_runs()) == 1
+
+    # Modify file with a bumped mtime -> must re-read; delete file -> must prune cache
+    monkeypatch.setattr(Path, "read_text", orig_read_text)
+    rec_path = tmp_path / "p_cache-left-1000.json"
+    _write_record(
+        tmp_path,
+        "p_cache-left-1000.json",
+        {"patient_id": "cache_01_updated", "ear": "left", "verdict": "Refer", "timestamp_ms": 2000},
+    )
+    import os
+    st = rec_path.stat()
+    os.utime(rec_path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+
+    updated = mgr.list_records()
+    assert updated[0]["patient_id"] == "cache_01_updated"
+    assert updated[0]["overall_verdict"] == "Refer"
+
+    rec_path.unlink()
+    assert mgr.list_records() == []

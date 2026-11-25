@@ -88,3 +88,22 @@ def test_get_config_metadata_loads_profiles_and_thresholds() -> None:
     assert meta["default_profile"] == "ugreen_80864_rpi5"
     assert meta["snr_threshold_db"] == 7.0
     assert meta["pass_rule_min_frequencies"] == 3
+
+
+def test_get_config_metadata_caches_by_mtime(tmp_path: Path) -> None:
+    cfg = tmp_path / "oae_config.toml"
+    cfg.write_text("[test]\nsnr_threshold_db = 7.0\n", encoding="utf-8")
+
+    m1 = get_config_metadata(cfg)
+    assert m1["snr_threshold_db"] == 7.0
+
+    with patch("gui.app.hardware._load_toml", side_effect=AssertionError("Should hit cache")):
+        m2 = get_config_metadata(cfg)
+    assert m2["snr_threshold_db"] == 7.0
+
+    import os
+    cfg.write_text("[test]\nsnr_threshold_db = 9.5\n", encoding="utf-8")
+    st = cfg.stat()
+    os.utime(cfg, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    m3 = get_config_metadata(cfg)
+    assert m3["snr_threshold_db"] == 9.5

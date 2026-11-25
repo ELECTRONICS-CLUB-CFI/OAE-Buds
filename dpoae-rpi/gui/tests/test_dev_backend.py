@@ -130,9 +130,15 @@ def test_stderr_streaming_over_sse(tmp_path: Path) -> None:
             while not queue.empty():
                 events.append(queue.get_nowait())
 
-        stderr_lines = [e["line"] for e in events if e.get("event") == "stderr"]
-        assert "ALSA debug line 1" in stderr_lines
-        assert "ALSA debug line 2" in stderr_lines
+        batched_lines: list[str] = []
+        for e in events:
+            if e.get("event") == "stderr_batch":
+                batched_lines.extend(e.get("lines", []))
+            elif e.get("event") == "stderr":
+                batched_lines.append(e.get("line", ""))
+        assert any(e.get("event") == "stderr_batch" for e in events)
+        assert "ALSA debug line 1" in batched_lines
+        assert "ALSA debug line 2" in batched_lines
 
     asyncio.run(scenario())
 

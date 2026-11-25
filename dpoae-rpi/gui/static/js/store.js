@@ -1,5 +1,5 @@
 /**
- * Centralized Reactive Store & /api/status Hydration
+ * Centralized Topic-Scoped Store & Diffed /api/status Hydration
  */
 
 const SETTINGS_KEY = "oae_buds_gui_settings_v1";
@@ -17,6 +17,7 @@ function loadSavedSettings() {
 }
 
 const saved = loadSavedSettings();
+let nextLogSeq = 0;
 
 export const store = {
   activeTab: "screening",
@@ -84,35 +85,87 @@ export const store = {
   dev: {
     runs: [],
     selectedRunFilename: null,
+    pendingRunFilename: null,
     spectrumData: null,
     selectedPairIndex: 0,
     toneTestBusy: false,
     toneTestResult: null,
     toneTestError: null,
     consoleLogs: [],
+    logResetCount: 0,
     consoleOpen: false,
   },
 };
 
-export function appendDevLog(kind, text) {
+export function appendDevLogs(kind, lines) {
+  if (!Array.isArray(lines) || lines.length === 0) return;
   const ts = new Date().toLocaleTimeString([], { hour12: false });
-  store.dev.consoleLogs.push({ ts, kind, text });
-  if (store.dev.consoleLogs.length > 300) {
+  for (const raw of lines) {
+    nextLogSeq += 1;
+    store.dev.consoleLogs.push({ seq: nextLogSeq, ts, kind, text: String(raw ?? "") });
+  }
+  while (store.dev.consoleLogs.length > 300) {
     store.dev.consoleLogs.shift();
   }
 }
 
-const listeners = new Set();
-
-export function subscribe(fn) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
+export function appendDevLog(kind, text) {
+  appendDevLogs(kind, [text]);
 }
 
-export function notify() {
-  for (const fn of listeners) {
+export function clearDevLogs() {
+  store.dev.consoleLogs = [];
+  store.dev.logResetCount += 1;
+}
+
+const ALL_TOPICS = ["session", "hardware", "records", "dev_metrics", "dev_tone", "dev_logs", "ui"];
+const topicListeners = new Map();
+
+function addTopicListener(topic, fn) {
+  let set = topicListeners.get(topic);
+  if (!set) {
+    set = new Set();
+    topicListeners.set(topic, set);
+  }
+  set.add(fn);
+}
+
+export function subscribe(topicsOrFn, maybeFn) {
+  const fn = typeof topicsOrFn === "function" ? topicsOrFn : maybeFn;
+  const topics = typeof topicsOrFn === "function"
+    ? ["*"]
+    : Array.isArray(topicsOrFn)
+      ? topicsOrFn
+      : [topicsOrFn];
+
+  if (typeof fn !== "function") return () => {};
+  for (const t of topics) {
+    addTopicListener(t, fn);
+  }
+  return () => {
+    for (const t of topics) {
+      topicListeners.get(t)?.delete(fn);
+    }
+  };
+}
+
+export function notify(...topics) {
+  const activeTopics = topics.length ? topics : ALL_TOPICS;
+  const toInvoke = new Set();
+  for (const t of activeTopics) {
+    const set = topicListeners.get(t);
+    if (set) {
+      for (const fn of set) toInvoke.add(fn);
+    }
+  }
+  const wildcard = topicListeners.get("*");
+  if (wildcard) {
+    for (const fn of wildcard) toInvoke.add(fn);
+  }
+
+  for (const fn of toInvoke) {
     try {
-      fn(store);
+      fn(store, activeTopics);
     } catch (err) {
       console.error("Store subscriber error:", err);
     }
@@ -140,39 +193,82 @@ if (typeof window !== "undefined" && window.matchMedia) {
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (store.settings.theme === "auto") {
       applyTheme();
-      notify();
+      notify("ui");
     }
   });
 }
 
-export function updateSettings(patch) {
-  store.settings = { ...store.settings, ...patch };
-  applyTheme();
+function persistSettings() {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(store.settings));
   } catch (_) {
     // ignore storage quota errors
   }
-  notify();
+}
+
+export function updateSettings(patch) {
+  store.settings = { ...store.settings, ...patch };
+  applyTheme();
+  persistSettings();
+  notify("ui");
+}
+
+let lastHardwareSnap = "";
+let lastConfigSnap = "";
+let lastSessionSnap = "";
+
+function stableSessionCompareKey(sess) {
+  if (!sess) return "";
+  // Ignore elapsed_seconds ticks when idle or identical, compare full state otherwise
+  return JSON.stringify(sess);
 }
 
 export function applyStatusPayload(data) {
   if (!data) return;
-  store.serverOnline = data.server === "ok";
-  if (data.audio_device) {
-    store.audioDevice = data.audio_device;
+  const changed = [];
+
+  const nextOnline = data.server === "ok";
+  if (nextOnline !== store.serverOnline) {
+    store.serverOnline = nextOnline;
+    changed.push("hardware");
   }
-  if (data.config) {
-    store.config = data.config;
-    const validNames = (data.config.profiles || []).map((p) => p.name);
-    if (validNames.length && !validNames.includes(store.settings.profile)) {
-      updateSettings({ profile: data.config.default_profile || validNames[0] });
+
+  if (data.audio_device) {
+    const hwSnap = JSON.stringify(data.audio_device);
+    if (hwSnap !== lastHardwareSnap) {
+      lastHardwareSnap = hwSnap;
+      store.audioDevice = data.audio_device;
+      if (!changed.includes("hardware")) changed.push("hardware");
     }
   }
-  if (data.active_session) {
-    store.activeSession = data.active_session;
+
+  if (data.config) {
+    const cfgSnap = JSON.stringify(data.config);
+    if (cfgSnap !== lastConfigSnap) {
+      lastConfigSnap = cfgSnap;
+      store.config = data.config;
+      if (!changed.includes("hardware")) changed.push("hardware");
+    }
+    const validNames = (data.config.profiles || []).map((p) => p.name);
+    if (validNames.length && !validNames.includes(store.settings.profile)) {
+      store.settings = { ...store.settings, profile: data.config.default_profile || validNames[0] };
+      persistSettings();
+      changed.push("ui");
+    }
   }
-  notify();
+
+  if (data.active_session) {
+    const sessSnap = stableSessionCompareKey(data.active_session);
+    if (sessSnap !== lastSessionSnap) {
+      lastSessionSnap = sessSnap;
+      store.activeSession = data.active_session;
+      changed.push("session");
+    }
+  }
+
+  if (changed.length > 0) {
+    notify(...changed);
+  }
 }
 
 export async function hydrateFromServer() {
@@ -183,8 +279,10 @@ export async function hydrateFromServer() {
     applyStatusPayload(data);
     return true;
   } catch (err) {
-    store.serverOnline = false;
-    notify();
+    if (store.serverOnline) {
+      store.serverOnline = false;
+      notify("hardware");
+    }
     return false;
   }
 }

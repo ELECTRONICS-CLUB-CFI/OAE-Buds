@@ -183,6 +183,9 @@ def lock_alsa_mixer(card_index: int) -> dict[str, Any]:
     }
 
 
+_CONFIG_METADATA_CACHE: dict[Path, tuple[int, dict[str, Any]]] = {}
+
+
 def _load_toml(config_path: Path) -> dict[str, Any]:
     if not config_path.exists():
         return {}
@@ -195,7 +198,23 @@ def _load_toml(config_path: Path) -> dict[str, Any]:
 
 
 def get_config_metadata(config_path: Path) -> dict[str, Any]:
-    """Read available hardware profiles and clinical test thresholds from oae_config.toml."""
+    """Read available hardware profiles and clinical test thresholds from oae_config.toml.
+
+    Caches parsed metadata keyed by resolved path and mtime_ns so frequent status polls
+    do not repeatedly re-parse TOML from disk.
+    """
+    resolved = config_path.resolve()
+    try:
+        mtime_ns = resolved.stat().st_mtime_ns
+    except OSError:
+        _CONFIG_METADATA_CACHE.pop(resolved, None)
+        mtime_ns = -1
+
+    if mtime_ns >= 0:
+        cached = _CONFIG_METADATA_CACHE.get(resolved)
+        if cached is not None and cached[0] == mtime_ns:
+            return cached[1]
+
     data = _load_toml(config_path)
     profiles_raw = data.get("profiles", {})
     profiles: list[dict[str, str]] = []
@@ -211,7 +230,7 @@ def get_config_metadata(config_path: Path) -> dict[str, Any]:
     vol_cfg = data.get("volume_calibration", {})
     art_cfg = data.get("artifact_rejection", {})
 
-    return {
+    meta = {
         "profiles": profiles,
         "default_profile": "ugreen_80864_rpi5",
         "snr_threshold_db": float(test_cfg.get("snr_threshold_db", 7.0)),
@@ -222,3 +241,6 @@ def get_config_metadata(config_path: Path) -> dict[str, Any]:
         "fit_check_default": bool(fit_cfg.get("enabled", False)),
         "vol_calib_default": bool(vol_cfg.get("enabled", True)),
     }
+    if mtime_ns >= 0:
+        _CONFIG_METADATA_CACHE[resolved] = (mtime_ns, meta)
+    return meta

@@ -6,10 +6,11 @@ import { store, notify } from "./store.js";
 import { buildEarCardHtml, destroyChart, escapeHtml, renderDpGramChart } from "./dpgram_chart.js";
 
 let currentModalRecord = null;
+let lastRecordsSignature = "";
 
 export async function fetchRecords() {
   store.records.loading = true;
-  notify();
+  notify("records");
 
   const params = new URLSearchParams();
   if (store.records.search) params.set("search", store.records.search);
@@ -27,7 +28,7 @@ export async function fetchRecords() {
     console.error("Failed to fetch records:", err);
   } finally {
     store.records.loading = false;
-    notify();
+    notify("records");
   }
 }
 
@@ -96,12 +97,20 @@ export function renderRecords() {
   const container = document.getElementById("records-list");
   if (!container) return;
 
-  if (store.records.loading && !store.records.items.length) {
+  const items = store.records.items || [];
+  const sig = `${Boolean(store.records.loading)}:${items
+    .map((i) => `${i.group_id}|${i.timestamp_ms}|${i.overall_verdict}|${Object.keys(i.ears || {}).join(",")}`)
+    .join(";")}`;
+  if (sig === lastRecordsSignature) {
+    return;
+  }
+  lastRecordsSignature = sig;
+
+  if (store.records.loading && !items.length) {
     container.innerHTML = '<p class="muted">Loading records...</p>';
     return;
   }
 
-  const items = store.records.items || [];
   if (!items.length) {
     container.innerHTML = '<p class="muted">No screening records match the current filter.</p>';
     return;
@@ -144,17 +153,18 @@ export function renderRecords() {
       </table>
     </div>
   `;
-
-  container.querySelectorAll(".btn-view-record").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const idx = Number(btn.dataset.idx);
-      const item = store.records.items[idx];
-      if (item) openRecordModal(item);
-    });
-  });
 }
 
 export function initRecords() {
+  // Single delegated click listener instead of rebinding per row on every render
+  document.getElementById("records-list").addEventListener("click", (e) => {
+    const btn = e.target.closest(".btn-view-record");
+    if (!btn) return;
+    const idx = Number(btn.dataset.idx);
+    const item = store.records.items[idx];
+    if (item) openRecordModal(item);
+  });
+
   let searchDebounce = null;
   document.getElementById("records-search").addEventListener("input", (e) => {
     store.records.search = e.target.value;

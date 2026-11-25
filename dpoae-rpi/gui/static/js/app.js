@@ -1,12 +1,14 @@
 /**
- * Main Application Shell: Tab Navigation, Header Badges, Lifecycle Hydration
+ * Main Application Shell: Tab Navigation, Dirty-Tab Visibility Gating, Adaptive Polling
  */
 
 import { store, subscribe, notify, hydrateFromServer, updateSettings, getEffectiveTheme, applyTheme } from "./store.js";
 import { initScreening, renderScreening, connectTelemetry } from "./screening.js";
 import { initRecords, renderRecords, fetchRecords, refreshOpenModalCharts } from "./records.js";
 import { initSettings, renderSettings } from "./settings.js";
-import { initDev, renderDev, fetchDevRuns, clearDevChartsBeforeThemeSwap } from "./dev.js";
+import { initDev, renderDev, fetchDevRuns, loadDevSpectrum, clearDevChartsBeforeThemeSwap } from "./dev.js";
+
+const dirtyTabs = new Set(["records", "settings", "dev"]);
 
 function renderThemeButton() {
   const isDark = getEffectiveTheme() === "dark";
@@ -75,14 +77,59 @@ function renderTabs() {
   document.getElementById("panel-dev").classList.toggle("hidden", !devEnabled || store.activeTab !== "dev");
 }
 
-function renderAll() {
-  renderThemeButton();
-  renderHeaderBadges();
+function renderTabByName(tabName) {
+  dirtyTabs.delete(tabName);
+  switch (tabName) {
+    case "screening":
+      renderScreening();
+      break;
+    case "records":
+      renderRecords();
+      break;
+    case "settings":
+      renderSettings();
+      break;
+    case "dev":
+      renderDev();
+      break;
+    default:
+      break;
+  }
+}
+
+function scheduleTabRender(tabName) {
+  if (tabName === "dev" && !store.settings.dev_mode) {
+    dirtyTabs.add("dev");
+    return;
+  }
+  if (store.activeTab === tabName) {
+    renderTabByName(tabName);
+  } else {
+    dirtyTabs.add(tabName);
+  }
+}
+
+async function activateTab(tabName) {
+  const prevTab = store.activeTab;
+  store.activeTab = tabName || "screening";
   renderTabs();
-  renderScreening();
-  renderRecords();
-  renderSettings();
-  renderDev();
+
+  if (store.activeTab === "records" && (prevTab !== "records" || dirtyTabs.has("records"))) {
+    if (dirtyTabs.has("records")) renderTabByName("records");
+    fetchRecords();
+  } else if (store.activeTab === "dev" && store.settings.dev_mode) {
+    renderTabByName("dev");
+    const pending = store.dev.pendingRunFilename;
+    if (pending) {
+      store.dev.pendingRunFilename = null;
+      await fetchDevRuns();
+      await loadDevSpectrum(pending);
+    } else if (!store.dev.runs.length) {
+      await fetchDevRuns();
+    }
+  } else if (dirtyTabs.has(store.activeTab)) {
+    renderTabByName(store.activeTab);
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -94,6 +141,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("btn-theme-toggle").addEventListener("click", () => {
     const nextTheme = getEffectiveTheme() === "dark" ? "light" : "dark";
     clearDevChartsBeforeThemeSwap();
+    dirtyTabs.add("dev");
+    dirtyTabs.add("screening");
     updateSettings({ theme: nextTheme });
     refreshOpenModalCharts();
   });
@@ -105,8 +154,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("btn-dev-confirm").addEventListener("click", () => {
     devModal.classList.add("hidden");
+    dirtyTabs.add("dev");
     updateSettings({ dev_mode: true });
-    fetchDevRuns();
+    if (store.activeTab === "dev") {
+      fetchDevRuns();
+    }
   });
   if (new URLSearchParams(window.location.search).get("dev") === "1" && !store.settings.dev_mode) {
     devModal.classList.remove("hidden");
@@ -114,56 +166,88 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      store.activeTab = btn.dataset.tab || "screening";
-      if (store.activeTab === "records") {
-        fetchRecords();
-      } else if (store.activeTab === "dev") {
-        fetchDevRuns();
-      }
-      notify();
+      activateTab(btn.dataset.tab || "screening");
     });
   });
 
   let prevSessionState = store.activeSession.state;
-  subscribe(() => {
-    renderAll();
+  subscribe("session", () => {
+    renderHeaderBadges();
+    scheduleTabRender("screening");
+    scheduleTabRender("dev");
+
     if (
       prevSessionState !== "completed" &&
       prevSessionState !== "waiting_for_next_ear" &&
       (store.activeSession.state === "completed" || store.activeSession.state === "waiting_for_next_ear")
     ) {
-      fetchRecords();
+      dirtyTabs.add("records");
+      if (store.activeTab === "records") {
+        fetchRecords();
+      }
     }
     prevSessionState = store.activeSession.state;
   });
 
-  await hydrateFromServer();
-  connectTelemetry();
-  fetchRecords();
-
-  // Re-hydrate seamlessly when tablet wakes from sleep or browser tab becomes visible
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      hydrateFromServer();
-    }
+  subscribe("hardware", () => {
+    renderHeaderBadges();
+    scheduleTabRender("settings");
+    scheduleTabRender("screening");
+    scheduleTabRender("dev");
   });
 
-  // Light poll every 5s so USB audio plug/unplug updates the header badge automatically
-  setInterval(() => {
+  subscribe("records", () => {
+    scheduleTabRender("records");
+  });
+
+  subscribe(["dev_metrics", "dev_tone", "dev_logs"], () => {
+    scheduleTabRender("dev");
+  });
+
+  subscribe("ui", () => {
+    renderThemeButton();
+    renderHeaderBadges();
+    renderTabs();
+    renderTabByName(store.activeTab);
+  });
+
+  renderThemeButton();
+  renderTabs();
+  await hydrateFromServer();
+  connectTelemetry();
+
+  // Adaptive poll: 15s when SSE is live (only checks USB audio badge), 5s when disconnected
+  let pollTimer = null;
+  function scheduleNextPoll() {
+    if (pollTimer !== null) clearTimeout(pollTimer);
+    const delayMs = store.sseConnected ? 15000 : 5000;
+    pollTimer = setTimeout(async () => {
+      pollTimer = null;
+      if (document.visibilityState === "visible") {
+        await hydrateFromServer();
+      }
+      scheduleNextPoll();
+    }, delayMs);
+  }
+  scheduleNextPoll();
+
+  // Re-hydrate seamlessly when tablet wakes from sleep or browser tab becomes visible
+  document.addEventListener("visibilitychange", async () => {
     if (document.visibilityState === "visible") {
-      hydrateFromServer();
+      await hydrateFromServer();
+      scheduleNextPoll();
     }
-  }, 5000);
+  });
 
   // Ensure Chart.js canvases render in high-contrast light colors when printing from dark mode
   window.addEventListener("beforeprint", () => {
     document.documentElement.setAttribute("data-theme", "light");
-    notify();
+    renderTabByName(store.activeTab);
     refreshOpenModalCharts();
   });
   window.addEventListener("afterprint", () => {
     applyTheme();
-    notify();
+    renderTabByName(store.activeTab);
     refreshOpenModalCharts();
   });
 });

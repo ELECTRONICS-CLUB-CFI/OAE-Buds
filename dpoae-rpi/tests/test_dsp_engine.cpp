@@ -109,6 +109,39 @@ TEST(DspEngineTest, ArtifactRejectionDiscardsCorruptedBlock) {
     EXPECT_TRUE(res.pass); // Remaining 3 segments still detect OAE
 }
 
+TEST(DspEngineTest, AudioHealthAndWaveformEnvelopeAndDecimatedSpectrum) {
+    std::vector<int16_t> buf(48000, 0);
+    for (size_t i = 0; i < buf.size(); ++i) {
+        double t = static_cast<double>(i) / 48000.0;
+        buf[i] = static_cast<int16_t>(16384.0 * std::sin(2.0 * M_PI * 1500.0 * t));
+    }
+    buf[100] = 32767;
+    buf[101] = -32768;
+
+    auto health = oae::dsp::compute_audio_health(buf);
+    EXPECT_EQ(health.clipped_samples, 2u);
+    EXPECT_NEAR(health.peak_dbfs, 0.0, 0.1);
+    EXPECT_LT(health.rms_dbfs, -5.0);
+    EXPECT_GT(health.rms_dbfs, -12.0);
+
+    auto env = oae::dsp::compute_waveform_envelope(buf, 500);
+    EXPECT_EQ(env.min_vals.size(), 500u);
+    EXPECT_EQ(env.max_vals.size(), 500u);
+
+    std::vector<double> time_data(buf.begin(), buf.end());
+    auto pwr = oae::dsp::compute_power_spectrum(time_data);
+    auto dec = oae::dsp::decimate_spectrum_db(pwr, 48000, 500.0, 6000.0, 512);
+    EXPECT_EQ(dec.freqs_hz.size(), 512u);
+    EXPECT_EQ(dec.magnitudes_db.size(), 512u);
+
+    // Peak in decimated spectrum should align near 1500 Hz
+    size_t best_idx = 0;
+    for (size_t i = 1; i < dec.magnitudes_db.size(); ++i) {
+        if (dec.magnitudes_db[i] > dec.magnitudes_db[best_idx]) best_idx = i;
+    }
+    EXPECT_NEAR(dec.freqs_hz[best_idx], 1500.0, 25.0);
+}
+
 #ifndef GTEST_INCLUDE_GTEST_GTEST_H_
 int main() {
     return RUN_ALL_TESTS();

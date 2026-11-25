@@ -38,6 +38,8 @@ class SessionState:
     mock: bool = False
     fit_check: bool = False
     vol_calib: bool = True
+    dev_telemetry: bool = False
+    dev_file: str | None = None
 
     current_phase: str | None = None
     current_frequency_index: int = 0
@@ -49,6 +51,7 @@ class SessionState:
     final_elapsed_seconds: float = 0.0
 
     frequencies_done: list[dict[str, Any]] = field(default_factory=list)
+    latest_dev_metrics: list[dict[str, Any]] = field(default_factory=list)
     fit_check_passed: bool | None = None
     vol_calib_passed: bool | None = None
     left_result: dict[str, Any] | None = None
@@ -72,6 +75,8 @@ class SessionState:
             "mock": self.mock,
             "fit_check": self.fit_check,
             "vol_calib": self.vol_calib,
+            "dev_telemetry": self.dev_telemetry,
+            "dev_file": self.dev_file,
             "current_phase": self.current_phase,
             "current_frequency_index": self.current_frequency_index,
             "total_frequencies": self.total_frequencies,
@@ -80,6 +85,7 @@ class SessionState:
             "artifact_status": self.artifact_status,
             "elapsed_seconds": self.elapsed_seconds(),
             "frequencies_done": list(self.frequencies_done),
+            "latest_dev_metrics": list(self.latest_dev_metrics),
             "fit_check_passed": self.fit_check_passed,
             "vol_calib_passed": self.vol_calib_passed,
             "left_result": self.left_result,
@@ -149,6 +155,14 @@ class SessionManager:
         for q in stale:
             self._subscribers.discard(q)
 
+    OVERRIDE_FLAGS: dict[str, tuple[str, type]] = {
+        "snr_threshold_db": ("--snr-threshold", float),
+        "constant_tone_seconds": ("--tone-seconds", int),
+        "pass_rule_min_frequencies": ("--min-pass-freqs", int),
+        "amp_threshold": ("--amp-threshold", int),
+        "art_threshold_db": ("--art-threshold", float),
+    }
+
     async def start_test(
         self,
         patient_id: str,
@@ -160,7 +174,12 @@ class SessionManager:
         vol_calib: bool = True,
         notes: str = "",
         session_id: str | None = None,
+        dev_telemetry: bool = False,
+        overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if self._lock.locked() or self.state.state == "running":
+            raise SessionConflictError("A screening or hardware test is already active.")
+
         async with self._lock:
             if self.state.state == "running":
                 raise SessionConflictError("A screening test is already active.")
@@ -217,6 +236,7 @@ class SessionManager:
                 mock=mock,
                 fit_check=fit_check,
                 vol_calib=vol_calib,
+                dev_telemetry=dev_telemetry,
                 started_at_monotonic=time.monotonic(),
                 left_result=prior_left,
                 right_result=prior_right,
@@ -238,6 +258,19 @@ class SessionManager:
             ]
             if mock:
                 cmd.append("--mock")
+            if dev_telemetry:
+                cmd.append("--dev-telemetry")
+
+            if overrides:
+                for key, value in overrides.items():
+                    if value is None or key not in self.OVERRIDE_FLAGS:
+                        continue
+                    flag, caster = self.OVERRIDE_FLAGS[key]
+                    try:
+                        casted = caster(value)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"Invalid override value for '{key}': {value}") from exc
+                    cmd.extend([flag, str(casted)])
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -245,8 +278,11 @@ class SessionManager:
                 stderr=asyncio.subprocess.PIPE,
             )
             self._process = proc
+            if dev_telemetry:
+                await self._broadcast({"event": "cmd", "argv": cmd})
+
             self._supervisor_task = asyncio.create_task(
-                self._supervise_process(proc, active_session_id, ear_norm)
+                self._supervise_process(proc, active_session_id, ear_norm, emit_dev_logs=dev_telemetry)
             )
 
             return {
@@ -255,6 +291,91 @@ class SessionManager:
                 "ear": ear_norm,
                 "workflow": workflow_norm,
             }
+
+    async def run_tone_test(
+        self,
+        channel: str = "left",
+        freq_hz: float = 1000.0,
+        f2_hz: float | None = None,
+        duration_s: float = 2.0,
+        amplitude: float = 0.2,
+    ) -> dict[str, Any]:
+        """Run a live-hardware duplex tone sanity check under the shared hardware mutex."""
+        if self._lock.locked() or self.state.state == "running":
+            raise SessionConflictError("Cannot run tone test while another screening or hardware test is active.")
+
+        async with self._lock:
+            if self.state.state == "running":
+                raise SessionConflictError("A screening test is already active.")
+
+            ch = channel.strip().lower()
+            if ch not in ("left", "right", "both"):
+                raise ValueError("Channel must be 'left', 'right', or 'both'.")
+
+            if not self.binary_path.is_file():
+                raise FileNotFoundError(f"Screening binary not found at {self.binary_path}")
+
+            audio = detect_audio_device(self.cards_path)
+            if not audio.connected or audio.card_index is None:
+                raise AudioDeviceNotFoundError(
+                    "Live USB audio hardware required for tone test. Connect UGREEN 80864 adapter."
+                )
+
+            mixer_res = await asyncio.to_thread(self._mixer_locker, audio.card_index)
+            if not mixer_res.get("ok", False):
+                raise HardwareError(mixer_res.get("error") or "Failed to lock ALSA mixer settings.")
+
+            self.results_dir.mkdir(parents=True, exist_ok=True)
+
+            cmd = [
+                str(self.binary_path),
+                "--config", str(self.config_path),
+                "--tone-test",
+                "--channel", ch,
+                "--freq", str(freq_hz),
+                "--duration", str(duration_s),
+                "--amp", str(amplitude),
+                "--out-dir", str(self.results_dir),
+                "--json-stream",
+            ]
+            if f2_hz is not None and f2_hz > 0:
+                cmd.extend(["--f2", str(f2_hz)])
+
+            await self._broadcast({"event": "cmd", "argv": cmd})
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, stderr_bytes = await proc.communicate()
+            stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+            if stderr_text:
+                for line in stderr_text.splitlines():
+                    await self._broadcast({"event": "stderr", "line": line})
+
+            result_ev: dict[str, Any] | None = None
+            for raw_line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(ev, dict) and ev.get("event") == "tone_test_result":
+                    result_ev = ev
+                    break
+                if isinstance(ev, dict) and ev.get("event") == "error":
+                    raise HardwareError(str(ev.get("message", "Tone test failed.")))
+
+            if result_ev is None:
+                raise HardwareError(stderr_text or f"Tone test failed (exit code {proc.returncode}).")
+
+            wav_path = result_ev.get("wav_file") or ""
+            result_ev["wav_filename"] = Path(wav_path).name if wav_path else None
+            await self._broadcast(result_ev)
+            return result_ev
 
     async def stop_test(self) -> dict[str, Any]:
         proc = self._process
@@ -325,13 +446,37 @@ class SessionManager:
             return None
         return None
 
+    async def _stream_stderr(
+        self,
+        stream: asyncio.StreamReader | None,
+        emit_dev_logs: bool,
+        collected: list[str],
+    ) -> None:
+        if stream is None:
+            return
+        while True:
+            raw_line = await stream.readline()
+            if not raw_line:
+                break
+            line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+            if not line:
+                continue
+            collected.append(line)
+            if emit_dev_logs:
+                await self._broadcast({"event": "stderr", "line": line})
+
     async def _supervise_process(
         self,
         proc: asyncio.subprocess.Process,
         session_id: str,
         ear: str,
+        emit_dev_logs: bool = False,
     ) -> None:
         terminal_event_seen = False
+        stderr_lines: list[str] = []
+        stderr_task = asyncio.create_task(
+            self._stream_stderr(proc.stderr, emit_dev_logs, stderr_lines)
+        )
 
         try:
             assert proc.stdout is not None
@@ -382,6 +527,10 @@ class SessionManager:
                     }
                     await self._broadcast(ev)
 
+                elif event_name == "dev_telemetry":
+                    self.state.latest_dev_metrics.append(ev)
+                    await self._broadcast(ev)
+
                 elif event_name == "artifact_status":
                     self.state.artifact_status = ev
                     await self._broadcast(ev)
@@ -394,6 +543,10 @@ class SessionManager:
                     terminal_event_seen = True
                     if self.state.started_at_monotonic is not None:
                         self.state.final_elapsed_seconds = time.monotonic() - self.state.started_at_monotonic
+
+                    dev_file_path = ev.get("dev_file")
+                    if dev_file_path:
+                        self.state.dev_file = Path(str(dev_file_path)).name
 
                     summary = self._load_saved_summary(ev.get("json_file"))
                     if summary is None:
@@ -418,6 +571,8 @@ class SessionManager:
 
                     ev_out = dict(ev)
                     ev_out["summary"] = summary
+                    if self.state.dev_file:
+                        ev_out["dev_filename"] = self.state.dev_file
 
                     if self.state.workflow == "bilateral" and ear == "left" and self.state.right_result is None:
                         self.state.state = "waiting_for_next_ear"
@@ -450,8 +605,8 @@ class SessionManager:
                     await self._broadcast(ev)
 
             return_code = await proc.wait()
-            stderr_bytes = await proc.stderr.read() if proc.stderr else b""
-            stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+            await stderr_task
+            stderr_text = "\n".join(stderr_lines).strip()
 
             if not terminal_event_seen:
                 if self.state.started_at_monotonic is not None:

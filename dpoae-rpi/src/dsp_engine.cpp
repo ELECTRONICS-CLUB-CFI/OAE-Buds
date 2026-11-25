@@ -224,9 +224,108 @@ std::vector<double> xcorr_fft(const std::vector<double>& preamble, const std::ve
     return corr;
 }
 
+AudioHealthMetrics compute_audio_health(std::span<const int16_t> samples) {
+    AudioHealthMetrics metrics;
+    if (samples.empty()) {
+        return metrics;
+    }
+
+    double max_abs = 0.0;
+    double sum_sq = 0.0;
+    uint32_t clipped = 0;
+
+    for (int16_t s : samples) {
+        double abs_val = std::abs(static_cast<double>(s));
+        if (abs_val > max_abs) {
+            max_abs = abs_val;
+        }
+        if (s >= 32767 || s <= -32767) {
+            clipped++;
+        }
+        sum_sq += abs_val * abs_val;
+    }
+
+    double rms = std::sqrt(sum_sq / static_cast<double>(samples.size()));
+    metrics.peak_dbfs = (max_abs > 0.0) ? std::max(-120.0, 20.0 * std::log10(max_abs / 32768.0)) : -120.0;
+    metrics.rms_dbfs = (rms > 0.0) ? std::max(-120.0, 20.0 * std::log10(rms / 32768.0)) : -120.0;
+    metrics.clipped_samples = clipped;
+    return metrics;
+}
+
+WaveformEnvelope compute_waveform_envelope(std::span<const int16_t> samples, size_t target_points) {
+    WaveformEnvelope env;
+    if (samples.empty() || target_points == 0) {
+        return env;
+    }
+
+    size_t buckets = std::min(target_points, samples.size());
+    env.min_vals.reserve(buckets);
+    env.max_vals.reserve(buckets);
+
+    for (size_t b = 0; b < buckets; ++b) {
+        size_t start = (b * samples.size()) / buckets;
+        size_t end = ((b + 1) * samples.size()) / buckets;
+        if (end <= start) end = start + 1;
+        int16_t lo = samples[start];
+        int16_t hi = samples[start];
+        for (size_t i = start + 1; i < end && i < samples.size(); ++i) {
+            if (samples[i] < lo) lo = samples[i];
+            if (samples[i] > hi) hi = samples[i];
+        }
+        env.min_vals.push_back(lo);
+        env.max_vals.push_back(hi);
+    }
+    return env;
+}
+
+DecimatedSpectrum decimate_spectrum_db(const std::vector<double>& spec_power,
+                                       uint32_t sample_rate,
+                                       double min_hz,
+                                       double max_hz,
+                                       size_t num_points) {
+    DecimatedSpectrum out;
+    if (spec_power.size() < 2 || num_points == 0 || sample_rate == 0) {
+        return out;
+    }
+
+    double nyquist = static_cast<double>(sample_rate) / 2.0;
+    double bin_hz = nyquist / static_cast<double>(spec_power.size() - 1);
+    double clamped_min = std::max(0.0, min_hz);
+    double clamped_max = std::min(nyquist, max_hz);
+    if (clamped_max <= clamped_min) {
+        return out;
+    }
+
+    out.freqs_hz.reserve(num_points);
+    out.magnitudes_db.reserve(num_points);
+
+    double step_hz = (clamped_max - clamped_min) / static_cast<double>(num_points);
+    for (size_t p = 0; p < num_points; ++p) {
+        double f_lo = clamped_min + static_cast<double>(p) * step_hz;
+        double f_hi = f_lo + step_hz;
+        double f_mid = 0.5 * (f_lo + f_hi);
+
+        size_t idx_lo = static_cast<size_t>(std::floor(f_lo / bin_hz));
+        size_t idx_hi = static_cast<size_t>(std::ceil(f_hi / bin_hz));
+        idx_lo = std::min(idx_lo, spec_power.size() - 1);
+        idx_hi = std::min(std::max(idx_lo, idx_hi), spec_power.size() - 1);
+
+        double peak_pwr = 0.0;
+        for (size_t idx = idx_lo; idx <= idx_hi; ++idx) {
+            if (spec_power[idx] > peak_pwr) {
+                peak_pwr = spec_power[idx];
+            }
+        }
+        out.freqs_hz.push_back(f_mid);
+        out.magnitudes_db.push_back(10.0 * std::log10(std::max(peak_pwr, EPSILON)));
+    }
+    return out;
+}
+
 DpoaeResult process_frequency_pair(std::span<const int16_t> raw_recording,
                                    const FrequencyPair& pair,
-                                   const OaeConfig& config) {
+                                   const OaeConfig& config,
+                                   std::vector<double>* out_spec_power) {
     uint32_t seglen = config.audio.process_window_length(); // 48000
     uint32_t trim_len = config.audio.init_trim_length();     // 48000
 
@@ -339,6 +438,10 @@ DpoaeResult process_frequency_pair(std::span<const int16_t> raw_recording,
     result.segments_used = segcounter;
     result.segments_rejected = rejected_count;
     result.pass = (final_snr >= config.test.snr_threshold_db);
+
+    if (out_spec_power != nullptr) {
+        *out_spec_power = spec_power;
+    }
 
     return result;
 }

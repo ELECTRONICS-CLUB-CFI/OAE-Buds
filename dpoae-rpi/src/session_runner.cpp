@@ -7,6 +7,8 @@
 #include <chrono>
 #include <iomanip>
 #include <filesystem>
+#include <algorithm>
+#include <cmath>
 
 namespace oae {
 namespace session {
@@ -86,6 +88,9 @@ std::string SessionSummary::to_json() const {
     ss << "  \"fit_check_passed\": " << (fit_check_passed ? "true" : "false") << ",\n";
     ss << "  \"vol_calib_passed\": " << (vol_calib_passed ? "true" : "false") << ",\n";
     ss << "  \"total_duration_seconds\": " << std::fixed << std::setprecision(2) << total_duration_seconds << ",\n";
+    if (!dev_telemetry_file.empty()) {
+        ss << "  \"dev_telemetry_file\": \"" << escape_json(dev_telemetry_file) << "\",\n";
+    }
     ss << "  \"frequencies\": [\n";
 
     for (size_t i = 0; i < results.size(); ++i) {
@@ -117,7 +122,8 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
                                          bool json_stream,
                                          const std::string& session_id,
                                          const std::string& notes,
-                                         const std::atomic<bool>* stop_flag) {
+                                         const std::atomic<bool>* stop_flag,
+                                         bool dev_telemetry) {
     auto start_time = std::chrono::steady_clock::now();
     uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -260,6 +266,16 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
         std::filesystem::create_directories(output_dir);
     }
 
+    struct DevPairTelemetry {
+        size_t pair_index = 0;
+        dsp::DpoaeResult result;
+        dsp::AudioHealthMetrics health;
+        dsp::DecimatedSpectrum spectrum;
+        dsp::WaveformEnvelope waveform;
+        std::string wav_file;
+    };
+    std::vector<DevPairTelemetry> dev_pairs;
+
     for (size_t i = 0; i < active_pairs.size(); ++i) {
         if (stop_flag && stop_flag->load()) {
             if (json_stream) {
@@ -302,17 +318,40 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
         }
 
         // Save raw WAV file
+        std::string saved_wav_path;
         if (!output_dir.empty()) {
-            std::string wav_path = output_dir + "/" + base_filename + "-" + std::to_string(pair.f2) + ".wav";
-            save_wav(wav_path, rx_mono, fs);
+            saved_wav_path = output_dir + "/" + base_filename + "-" + std::to_string(pair.f2) + ".wav";
+            save_wav(saved_wav_path, rx_mono, fs);
         }
 
         // Process DPOAE response
-        auto dpoae_res = dsp::process_frequency_pair(rx_mono, pair, config_);
+        std::vector<double> spec_power;
+        auto dpoae_res = dsp::process_frequency_pair(
+            rx_mono, pair, config_, dev_telemetry ? &spec_power : nullptr);
         summary.results.push_back(dpoae_res);
 
         if (dpoae_res.pass) {
             summary.passed_count++;
+        }
+
+        if (dev_telemetry) {
+            DevPairTelemetry dev_item;
+            dev_item.pair_index = i + 1;
+            dev_item.result = dpoae_res;
+            dev_item.health = dsp::compute_audio_health(rx_mono);
+            dev_item.spectrum = dsp::decimate_spectrum_db(spec_power, fs, 500.0, 6000.0, 512);
+            dev_item.waveform = dsp::compute_waveform_envelope(rx_mono, 500);
+            dev_item.wav_file = saved_wav_path;
+
+            if (json_stream) {
+                std::cout << "{\"event\": \"dev_telemetry\", \"pair_index\": " << dev_item.pair_index
+                          << ", \"f1\": " << pair.f1
+                          << ", \"f2\": " << pair.f2
+                          << ", \"peak_dbfs\": " << std::fixed << std::setprecision(1) << dev_item.health.peak_dbfs
+                          << ", \"rms_dbfs\": " << std::fixed << std::setprecision(1) << dev_item.health.rms_dbfs
+                          << ", \"clipped_samples\": " << dev_item.health.clipped_samples << "}\n" << std::flush;
+            }
+            dev_pairs.push_back(std::move(dev_item));
         }
 
         if (json_stream) {
@@ -352,6 +391,59 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
     auto end_time = std::chrono::steady_clock::now();
     summary.total_duration_seconds = std::chrono::duration<double>(end_time - start_time).count();
 
+    // 5b. Write Dev Telemetry Sidecar JSON (if enabled)
+    std::string saved_dev_path;
+    if (dev_telemetry && !output_dir.empty()) {
+        saved_dev_path = output_dir + "/" + base_filename + "-dev.json";
+        std::ofstream dev_out(saved_dev_path);
+        if (dev_out.is_open()) {
+            dev_out << "{\n";
+            dev_out << "  \"session_id\": \"" << escape_json(session_id) << "\",\n";
+            dev_out << "  \"patient_id\": \"" << escape_json(patient_id) << "\",\n";
+            dev_out << "  \"ear\": \"" << escape_json(ear) << "\",\n";
+            dev_out << "  \"sample_rate\": " << fs << ",\n";
+            dev_out << "  \"pairs\": [\n";
+            for (size_t p = 0; p < dev_pairs.size(); ++p) {
+                const auto& dp = dev_pairs[p];
+                dev_out << "    {\n";
+                dev_out << "      \"pair_index\": " << dp.pair_index << ",\n";
+                dev_out << "      \"f1\": " << dp.result.f1 << ",\n";
+                dev_out << "      \"f2\": " << dp.result.f2 << ",\n";
+                dev_out << "      \"oae_bin\": " << dp.result.oae_bin << ",\n";
+                dev_out << "      \"imd_bin\": " << dp.result.imd_bin << ",\n";
+                dev_out << "      \"signal_db\": " << std::fixed << std::setprecision(1) << dp.result.signal_db << ",\n";
+                dev_out << "      \"noise_db\": " << std::fixed << std::setprecision(1) << dp.result.noise_db << ",\n";
+                dev_out << "      \"snr_db\": " << std::fixed << std::setprecision(1) << dp.result.snr_db << ",\n";
+                dev_out << "      \"peak_dbfs\": " << std::fixed << std::setprecision(1) << dp.health.peak_dbfs << ",\n";
+                dev_out << "      \"rms_dbfs\": " << std::fixed << std::setprecision(1) << dp.health.rms_dbfs << ",\n";
+                dev_out << "      \"clipped_samples\": " << dp.health.clipped_samples << ",\n";
+                dev_out << "      \"wav_file\": \"" << escape_json(dp.wav_file) << "\",\n";
+                dev_out << "      \"spectrum\": {\n";
+                dev_out << "        \"freqs_hz\": [";
+                for (size_t k = 0; k < dp.spectrum.freqs_hz.size(); ++k) {
+                    dev_out << std::fixed << std::setprecision(1) << dp.spectrum.freqs_hz[k]
+                            << (k + 1 < dp.spectrum.freqs_hz.size() ? ", " : "");
+                }
+                dev_out << "],\n        \"magnitudes_db\": [";
+                for (size_t k = 0; k < dp.spectrum.magnitudes_db.size(); ++k) {
+                    dev_out << std::fixed << std::setprecision(1) << dp.spectrum.magnitudes_db[k]
+                            << (k + 1 < dp.spectrum.magnitudes_db.size() ? ", " : "");
+                }
+                dev_out << "]\n      },\n      \"waveform\": {\n        \"min\": [";
+                for (size_t k = 0; k < dp.waveform.min_vals.size(); ++k) {
+                    dev_out << dp.waveform.min_vals[k] << (k + 1 < dp.waveform.min_vals.size() ? ", " : "");
+                }
+                dev_out << "],\n        \"max\": [";
+                for (size_t k = 0; k < dp.waveform.max_vals.size(); ++k) {
+                    dev_out << dp.waveform.max_vals[k] << (k + 1 < dp.waveform.max_vals.size() ? ", " : "");
+                }
+                dev_out << "]\n      }\n    }" << (p + 1 < dev_pairs.size() ? "," : "") << "\n";
+            }
+            dev_out << "  ]\n}\n";
+            summary.dev_telemetry_file = saved_dev_path;
+        }
+    }
+
     // 6. Save JSON report
     std::string saved_json_path = "";
     if (!output_dir.empty()) {
@@ -371,7 +463,11 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
                   << "\", \"passed_count\": " << summary.passed_count
                   << ", \"total_active_frequencies\": " << summary.total_active_frequencies
                   << ", \"duration_seconds\": " << std::fixed << std::setprecision(2) << summary.total_duration_seconds
-                  << ", \"json_file\": \"" << escape_json(saved_json_path) << "\"}\n" << std::flush;
+                  << ", \"json_file\": \"" << escape_json(saved_json_path) << "\"";
+        if (!saved_dev_path.empty()) {
+            std::cout << ", \"dev_file\": \"" << escape_json(saved_dev_path) << "\"";
+        }
+        std::cout << "}\n" << std::flush;
     } else if (verbose) {
         std::cout << "=========================================================\n";
         std::cout << "[FINAL RESULT] Verdict: " << summary.verdict
@@ -381,6 +477,139 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
     }
 
     return summary;
+}
+
+std::string ToneTestResult::to_json_line() const {
+    std::ostringstream ss;
+    ss << "{\"event\": \"tone_test_result\""
+       << ", \"channel\": \"" << escape_json(channel) << "\""
+       << ", \"target_hz\": " << std::fixed << std::setprecision(1) << target_hz;
+    if (f2_hz > 0.0) {
+        ss << ", \"f2_hz\": " << std::fixed << std::setprecision(1) << f2_hz;
+    } else {
+        ss << ", \"f2_hz\": null";
+    }
+    ss << ", \"amplitude_requested\": " << std::fixed << std::setprecision(3) << amplitude_requested
+       << ", \"amplitude_applied\": " << std::fixed << std::setprecision(3) << amplitude_applied
+       << ", \"duration_s\": " << std::fixed << std::setprecision(2) << duration_s
+       << ", \"measured_peak_hz\": " << std::fixed << std::setprecision(1) << measured_peak_hz
+       << ", \"rms_dbfs\": " << std::fixed << std::setprecision(1) << rms_dbfs
+       << ", \"peak_dbfs\": " << std::fixed << std::setprecision(1) << peak_dbfs
+       << ", \"clipped_samples\": " << clipped_samples
+       << ", \"latency_ms\": " << std::fixed << std::setprecision(1) << latency_ms
+       << ", \"wav_file\": \"" << escape_json(wav_file) << "\"}";
+    return ss.str();
+}
+
+ToneTestResult SessionRunner::run_tone_test(const ToneTestConfig& opts,
+                                             const std::atomic<bool>* stop_flag) {
+    ToneTestResult res;
+    res.channel = (opts.channel == "right" || opts.channel == "both") ? opts.channel : "left";
+    res.target_hz = std::clamp(opts.freq_hz, 50.0, 20000.0);
+    res.f2_hz = (opts.f2_hz > 0.0) ? std::clamp(opts.f2_hz, 50.0, 20000.0) : 0.0;
+    res.duration_s = std::clamp(opts.duration_s, 0.2, 10.0);
+    res.amplitude_requested = opts.amplitude;
+    // Enforce hard C++ acoustic safety ceiling
+    res.amplitude_applied = std::clamp(opts.amplitude, 0.0, ToneTestConfig::kMaxSafeAmplitude);
+
+    uint32_t fs = config_.audio.sample_rate;
+    uint32_t total_samples = static_cast<uint32_t>(std::round(res.duration_s * static_cast<double>(fs)));
+    if (total_samples < 1024) {
+        total_samples = 1024;
+    }
+
+    double f_left = 0.0;
+    double v_left = 0.0;
+    double f_right = 0.0;
+    double v_right = 0.0;
+    if (res.channel == "left") {
+        f_left = res.target_hz;
+        v_left = res.amplitude_applied;
+    } else if (res.channel == "right") {
+        f_right = (res.f2_hz > 0.0) ? res.f2_hz : res.target_hz;
+        v_right = res.amplitude_applied;
+    } else {
+        f_left = res.target_hz;
+        v_left = res.amplitude_applied;
+        f_right = (res.f2_hz > 0.0) ? res.f2_hz : res.target_hz;
+        v_right = res.amplitude_applied;
+    }
+
+    auto tx_stereo = signal_gen::make_dual_tone(f_left, f_right, fs, total_samples, v_left, v_right);
+    std::vector<int16_t> rx_mono(total_samples, 0);
+
+    audio_engine_.run_duplex_fixed(tx_stereo, rx_mono);
+
+    if (stop_flag && stop_flag->load()) {
+        if (opts.json_stream) {
+            std::cout << "{\"event\": \"aborted\", \"reason\": \"Tone test aborted\"}\n" << std::flush;
+        }
+        return res;
+    }
+
+    // Save captured WAV
+    if (!opts.output_dir.empty()) {
+        std::filesystem::create_directories(opts.output_dir);
+        uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        res.wav_file = opts.output_dir + "/tone-test-" + std::to_string(now_ms) + ".wav";
+        save_wav(res.wav_file, rx_mono, fs);
+    }
+
+    auto health = dsp::compute_audio_health(rx_mono);
+    res.rms_dbfs = health.rms_dbfs;
+    res.peak_dbfs = health.peak_dbfs;
+    res.clipped_samples = health.clipped_samples;
+
+    // Estimate onset latency
+    int16_t max_abs = 0;
+    for (int16_t s : rx_mono) {
+        int32_t a = std::abs(static_cast<int32_t>(s));
+        if (a > max_abs) max_abs = static_cast<int16_t>(a);
+    }
+    if (max_abs > 10) {
+        double thresh = std::max(10.0, 0.1 * static_cast<double>(max_abs));
+        for (size_t i = 0; i < rx_mono.size(); ++i) {
+            if (std::abs(static_cast<double>(rx_mono[i])) >= thresh) {
+                res.latency_ms = static_cast<double>(i) * 1000.0 / static_cast<double>(fs);
+                break;
+            }
+        }
+    }
+
+    // Measure peak frequency on up to 1s steady-state window (padded to fs for 1 Hz resolution)
+    size_t offset = (rx_mono.size() > fs / 2) ? (fs / 10) : 0;
+    size_t avail = (rx_mono.size() > offset) ? (rx_mono.size() - offset) : rx_mono.size();
+    size_t win = std::min(static_cast<size_t>(fs), avail);
+    std::vector<double> fft_in(fs, 0.0);
+    for (size_t i = 0; i < win; ++i) {
+        fft_in[i] = static_cast<double>(rx_mono[offset + i]);
+    }
+    auto pwr = dsp::compute_power_spectrum(fft_in);
+    size_t best_bin = 0;
+    double best_pwr = -1.0;
+    size_t max_bin = std::min(static_cast<size_t>(12000), pwr.size() - 1);
+    for (size_t b = 50; b <= max_bin; ++b) {
+        if (pwr[b] > best_pwr) {
+            best_pwr = pwr[b];
+            best_bin = b;
+        }
+    }
+    res.measured_peak_hz = static_cast<double>(best_bin);
+
+    if (opts.json_stream) {
+        std::cout << res.to_json_line() << "\n" << std::flush;
+    } else if (opts.verbose) {
+        std::cout << "[TONE TEST] channel=" << res.channel
+                  << " | target=" << res.target_hz << " Hz"
+                  << " | peak=" << res.measured_peak_hz << " Hz"
+                  << " | rms=" << res.rms_dbfs << " dBFS"
+                  << " | peak=" << res.peak_dbfs << " dBFS"
+                  << " | clipped=" << res.clipped_samples
+                  << " | latency=" << res.latency_ms << " ms\n";
+    }
+
+    return res;
 }
 
 } // namespace session

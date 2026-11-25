@@ -2,10 +2,21 @@
  * Main Application Shell: Tab Navigation, Header Badges, Lifecycle Hydration
  */
 
-import { store, subscribe, notify, hydrateFromServer } from "./store.js";
+import { store, subscribe, notify, hydrateFromServer, updateSettings, getEffectiveTheme, applyTheme } from "./store.js";
 import { initScreening, renderScreening, connectTelemetry } from "./screening.js";
-import { initRecords, renderRecords, fetchRecords } from "./records.js";
+import { initRecords, renderRecords, fetchRecords, refreshOpenModalCharts } from "./records.js";
 import { initSettings, renderSettings } from "./settings.js";
+import { initDev, renderDev, fetchDevRuns, clearDevChartsBeforeThemeSwap } from "./dev.js";
+
+function renderThemeButton() {
+  const isDark = getEffectiveTheme() === "dark";
+  const moon = document.getElementById("icon-theme-moon");
+  const sun = document.getElementById("icon-theme-sun");
+  const label = document.getElementById("theme-toggle-label");
+  if (moon) moon.classList.toggle("hidden", isDark);
+  if (sun) sun.classList.toggle("hidden", !isDark);
+  if (label) label.textContent = isDark ? "Light" : "Dark";
+}
 
 function renderHeaderBadges() {
   const audioBadge = document.getElementById("badge-audio");
@@ -41,6 +52,17 @@ function renderHeaderBadges() {
 }
 
 function renderTabs() {
+  const devEnabled = Boolean(store.settings.dev_mode);
+  const nav = document.querySelector(".tab-nav");
+  if (nav) nav.classList.toggle("has-dev", devEnabled);
+
+  const devBtn = document.getElementById("tab-btn-dev");
+  if (devBtn) devBtn.classList.toggle("hidden", !devEnabled);
+
+  if (!devEnabled && store.activeTab === "dev") {
+    store.activeTab = "screening";
+  }
+
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     const isActive = btn.dataset.tab === store.activeTab;
     btn.classList.toggle("active", isActive);
@@ -50,26 +72,53 @@ function renderTabs() {
   document.getElementById("panel-screening").classList.toggle("hidden", store.activeTab !== "screening");
   document.getElementById("panel-records").classList.toggle("hidden", store.activeTab !== "records");
   document.getElementById("panel-settings").classList.toggle("hidden", store.activeTab !== "settings");
+  document.getElementById("panel-dev").classList.toggle("hidden", !devEnabled || store.activeTab !== "dev");
 }
 
 function renderAll() {
+  renderThemeButton();
   renderHeaderBadges();
   renderTabs();
   renderScreening();
   renderRecords();
   renderSettings();
+  renderDev();
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   initScreening();
   initRecords();
   initSettings();
+  initDev();
+
+  document.getElementById("btn-theme-toggle").addEventListener("click", () => {
+    const nextTheme = getEffectiveTheme() === "dark" ? "light" : "dark";
+    clearDevChartsBeforeThemeSwap();
+    updateSettings({ theme: nextTheme });
+    refreshOpenModalCharts();
+  });
+
+  // Dev Mode confirmation dialog handlers + ?dev=1 activation
+  const devModal = document.getElementById("dev-confirm-modal");
+  document.getElementById("btn-dev-cancel").addEventListener("click", () => {
+    devModal.classList.add("hidden");
+  });
+  document.getElementById("btn-dev-confirm").addEventListener("click", () => {
+    devModal.classList.add("hidden");
+    updateSettings({ dev_mode: true });
+    fetchDevRuns();
+  });
+  if (new URLSearchParams(window.location.search).get("dev") === "1" && !store.settings.dev_mode) {
+    devModal.classList.remove("hidden");
+  }
 
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       store.activeTab = btn.dataset.tab || "screening";
       if (store.activeTab === "records") {
         fetchRecords();
+      } else if (store.activeTab === "dev") {
+        fetchDevRuns();
       }
       notify();
     });
@@ -105,4 +154,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       hydrateFromServer();
     }
   }, 5000);
+
+  // Ensure Chart.js canvases render in high-contrast light colors when printing from dark mode
+  window.addEventListener("beforeprint", () => {
+    document.documentElement.setAttribute("data-theme", "light");
+    notify();
+    refreshOpenModalCharts();
+  });
+  window.addEventListener("afterprint", () => {
+    applyTheme();
+    notify();
+    refreshOpenModalCharts();
+  });
 });

@@ -56,3 +56,44 @@ def test_frontend_has_zero_external_cdn_links() -> None:
     for path in asset_files:
         text = path.read_text(encoding="utf-8")
         assert not external_url_re.search(text), f"External URL found in offline asset: {path}"
+
+
+def test_dark_mode_assets_and_print_override() -> None:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    css = (STATIC_DIR / "css" / "app.css").read_text(encoding="utf-8")
+
+    assert 'id="btn-theme-toggle"' in html
+    assert 'id="setting-theme"' in html
+    assert ':root[data-theme="dark"]' in css
+    assert "@media print" in css
+    # Ensure print mode resets back to white paper even when dark mode is active
+    print_section = css.split("@media print", 1)[1]
+    assert ':root[data-theme="dark"]' in print_section
+    assert "--bg: #ffffff" in print_section
+
+
+def test_dev_tab_hidden_by_default_and_assets_present() -> None:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    dev_js = (STATIC_DIR / "js" / "dev.js").read_text(encoding="utf-8")
+    store_js = (STATIC_DIR / "js" / "store.js").read_text(encoding="utf-8")
+
+    # Dev tab and panel must be hidden by default in clinical mode
+    assert 'id="tab-btn-dev" class="tab-btn hidden"' in html
+    assert 'id="panel-dev" class="tab-panel hidden' in html
+    assert 'id="dev-confirm-modal" class="modal-backdrop hidden"' in html
+    assert 'id="btn-dev-confirm"' in html
+    assert 'id="setup-dev-overrides-pill"' in html
+    assert 'id="dev-use-overrides"' in html
+    assert 'id="dev-fft-canvas"' in html
+    assert 'id="dev-wave-canvas"' in html
+    assert 'id="dev-tone-form"' in html
+    assert 'id="dev-console-log"' in html
+
+    # Store defaults dev_mode and dev_overrides_enabled to false and keeps logs ephemeral
+    assert "dev_mode: typeof saved.dev_mode === \"boolean\" ? saved.dev_mode : false" in store_js
+    assert "dev_overrides_enabled: typeof saved.dev_overrides_enabled === \"boolean\" ? saved.dev_overrides_enabled : false" in store_js
+    assert "consoleLogs: []" in store_js
+    assert "/api/dev/tone-test" in dev_js
+    assert "/api/dev/runs" in dev_js
+    assert "/api/dev/spectrum/" in dev_js
+    assert "/api/dev/wav/" in dev_js

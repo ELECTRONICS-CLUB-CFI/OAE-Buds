@@ -81,6 +81,17 @@ async function openRecordModal(group) {
   if (rightFull) renderDpGramChart("modal-chart-right", rightFull.frequencies, snrThresh);
 }
 
+export function refreshOpenModalCharts() {
+  const modal = document.getElementById("record-modal");
+  if (!modal || modal.classList.contains("hidden") || !currentModalRecord?._full) {
+    return;
+  }
+  const snrThresh = store.config.snr_threshold_db || 7.0;
+  const { left, right } = currentModalRecord._full;
+  if (left) renderDpGramChart("modal-chart-left", left.frequencies, snrThresh);
+  if (right) renderDpGramChart("modal-chart-right", right.frequencies, snrThresh);
+}
+
 export function renderRecords() {
   const container = document.getElementById("records-list");
   if (!container) return;

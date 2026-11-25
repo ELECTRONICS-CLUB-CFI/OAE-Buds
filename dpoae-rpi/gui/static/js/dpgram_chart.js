@@ -33,11 +33,24 @@ export function renderDpGramChart(canvasId, frequencies, snrThresholdDb = 7.0) {
     return;
   }
 
+  const isDark =
+    typeof document !== "undefined" &&
+    document.documentElement.getAttribute("data-theme") === "dark";
+
   const labels = freqs.map((f) => `${f.f2} Hz`);
   const signalData = freqs.map((f) => Number(f.signal_db));
   const noiseData = freqs.map((f) => Number(f.noise_db));
   const thresholdData = freqs.map((f) => Number((Number(f.noise_db) + Number(snrThresholdDb)).toFixed(1)));
-  const pointColors = freqs.map((f) => (f.pass ? "#15803d" : "#b91c1c"));
+  const pointColors = freqs.map((f) => (f.pass ? (isDark ? "#4ade80" : "#15803d") : (isDark ? "#f87171" : "#b91c1c")));
+
+  const gridColor = isDark ? "#334155" : "#e2e8f0";
+  const tickColor = isDark ? "#cbd5e1" : "#334155";
+  const noiseLineColor = isDark ? "#94a3b8" : "#64748b";
+  const noisePointBg = isDark ? "#111827" : "#ffffff";
+  const signalLineColor = isDark ? "#2dd4bf" : "#0f766e";
+  const pointBorderColor = isDark ? "#111827" : "#ffffff";
+  const threshLineColor = isDark ? "rgba(74, 222, 128, 0.65)" : "rgba(21, 128, 61, 0.55)";
+  const threshFillColor = isDark ? "rgba(20, 184, 166, 0.16)" : "rgba(16, 185, 129, 0.14)";
 
   const chart = new window.Chart(canvas.getContext("2d"), {
     type: "line",
@@ -47,13 +60,13 @@ export function renderDpGramChart(canvasId, frequencies, snrThresholdDb = 7.0) {
         {
           label: "Noise Floor (dB)",
           data: noiseData,
-          borderColor: "#64748b",
-          backgroundColor: "#ffffff",
+          borderColor: noiseLineColor,
+          backgroundColor: noisePointBg,
           borderWidth: 2,
           borderDash: [5, 5],
           pointRadius: 5,
-          pointBackgroundColor: "#ffffff",
-          pointBorderColor: "#64748b",
+          pointBackgroundColor: noisePointBg,
+          pointBorderColor: noiseLineColor,
           pointBorderWidth: 2,
           tension: 0.15,
           fill: false,
@@ -61,8 +74,8 @@ export function renderDpGramChart(canvasId, frequencies, snrThresholdDb = 7.0) {
         {
           label: `Pass Threshold (Noise + ${snrThresholdDb} dB)`,
           data: thresholdData,
-          borderColor: "rgba(21, 128, 61, 0.55)",
-          backgroundColor: "rgba(16, 185, 129, 0.14)",
+          borderColor: threshLineColor,
+          backgroundColor: threshFillColor,
           borderWidth: 1.5,
           borderDash: [2, 3],
           pointRadius: 0,
@@ -72,13 +85,13 @@ export function renderDpGramChart(canvasId, frequencies, snrThresholdDb = 7.0) {
         {
           label: "DPOAE Signal (2f1 - f2)",
           data: signalData,
-          borderColor: "#0f766e",
-          backgroundColor: "#0f766e",
+          borderColor: signalLineColor,
+          backgroundColor: signalLineColor,
           borderWidth: 3,
           pointRadius: 6,
           pointHoverRadius: 8,
           pointBackgroundColor: pointColors,
-          pointBorderColor: "#ffffff",
+          pointBorderColor,
           pointBorderWidth: 2,
           tension: 0.15,
           fill: false,
@@ -92,7 +105,7 @@ export function renderDpGramChart(canvasId, frequencies, snrThresholdDb = 7.0) {
       plugins: {
         legend: {
           position: "bottom",
-          labels: { boxWidth: 14, padding: 14 },
+          labels: { boxWidth: 14, padding: 14, color: tickColor },
         },
         tooltip: {
           mode: "index",
@@ -110,12 +123,14 @@ export function renderDpGramChart(canvasId, frequencies, snrThresholdDb = 7.0) {
       },
       scales: {
         x: {
-          title: { display: true, text: "Stimulus f2 Frequency" },
-          grid: { color: "#e2e8f0" },
+          title: { display: true, text: "Stimulus f2 Frequency", color: tickColor },
+          ticks: { color: tickColor },
+          grid: { color: gridColor },
         },
         y: {
-          title: { display: true, text: "Level (dB)" },
-          grid: { color: "#e2e8f0" },
+          title: { display: true, text: "Level (dB)", color: tickColor },
+          ticks: { color: tickColor },
+          grid: { color: gridColor },
         },
       },
     },

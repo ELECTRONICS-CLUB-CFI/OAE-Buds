@@ -38,6 +38,16 @@ class StartTestRequest(BaseModel):
     mock: bool = False
     fit_check: bool = False
     vol_calib: bool = True
+    dev_telemetry: bool = False
+    overrides: dict[str, Any] | None = None
+
+
+class ToneTestRequest(BaseModel):
+    channel: str = Field(default="left")
+    freq_hz: float = Field(default=1000.0, ge=50.0, le=20000.0)
+    f2_hz: float | None = Field(default=None, ge=50.0, le=20000.0)
+    duration_s: float = Field(default=2.0, ge=0.2, le=10.0)
+    amplitude: float = Field(default=0.2, ge=0.0, le=1.0)
 
 
 def create_app(
@@ -149,6 +159,8 @@ def create_app(
                 vol_calib=req.vol_calib,
                 notes=req.notes,
                 session_id=req.session_id,
+                dev_telemetry=req.dev_telemetry,
+                overrides=req.overrides,
             )
         except SessionConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -207,6 +219,48 @@ def create_app(
             "audio_device": audio.to_dict(),
             "mixer": mixer_res,
         }
+
+    @app.post("/api/dev/tone-test")
+    async def dev_tone_test(req: ToneTestRequest) -> dict[str, Any]:
+        try:
+            return await session_mgr.run_tone_test(
+                channel=req.channel,
+                freq_hz=req.freq_hz,
+                f2_hz=req.f2_hz,
+                duration_s=req.duration_s,
+                amplitude=req.amplitude,
+            )
+        except SessionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except AudioDeviceNotFoundError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (ValueError, FileNotFoundError, HardwareError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/dev/runs")
+    async def dev_list_runs(limit: int = Query(default=30, ge=1, le=200)) -> dict[str, Any]:
+        runs = records_mgr.list_dev_runs(limit=limit)
+        return {"runs": runs, "count": len(runs)}
+
+    @app.get("/api/dev/wav/{filename}")
+    async def dev_get_wav(filename: str) -> FileResponse:
+        try:
+            wav_path = records_mgr.get_wav_path(filename)
+        except InvalidRecordPathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if wav_path is None:
+            raise HTTPException(status_code=404, detail="WAV recording not found.")
+        return FileResponse(wav_path, media_type="audio/wav", filename=filename)
+
+    @app.get("/api/dev/spectrum/{filename}")
+    async def dev_get_spectrum(filename: str) -> dict[str, Any]:
+        try:
+            data = records_mgr.get_dev_spectrum(filename)
+        except InvalidRecordPathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if data is None:
+            raise HTTPException(status_code=404, detail="Dev spectrum sidecar not found.")
+        return data
 
     return app
 

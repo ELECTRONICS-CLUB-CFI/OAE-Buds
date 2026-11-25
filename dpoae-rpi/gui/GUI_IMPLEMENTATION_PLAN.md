@@ -4,7 +4,7 @@
 > **Client Access**: Wireless via any Tablet / Smartphone / Laptop Browser over local Wi-Fi Hotspot or LAN  
 > **Backend**: Python 3 (FastAPI + Uvicorn) with Server-Sent Events (SSE) Telemetry & REST API  
 > **Frontend**: 100% Offline, Zero-Build Single Page Application (Vanilla HTML5 + ES6 + Local Chart.js + Pure CSS)  
-> **Screening Engine**: Native C++20 `dpoae-rpi` CLI / `liboae_core` (with `--json-stream` NDJSON output)
+> **Screening Engine**: Native C++20 `dpoae-rpi` CLI / `liboae_core` (with `--json-stream`, `--dev-telemetry`, and `--tone-test`)
 
 ---
 
@@ -17,13 +17,13 @@
 |   +---------------------------------------------------------------------------------------+   |
 |   |                          Browser (Safari / Chrome / Firefox)                          |   |
 |   |                                                                                       |   |
-|   |   [ Tab 1: Screening ]        [ Tab 2: Past Records ]      [ Tab 3: Settings & Diag ] |   |
-|   |   - Patient & Notes Form      - Search by Patient ID       - USB Audio Status Badge   |   |
-|   |   - Guided Bilateral Flow     - Paired Bilateral Grouping  - Mock / Live Mode Toggle  |   |
-|   |   - Simple Step Progress      - DP-Gram Re-inspection      - Profile Selector         |   |
-|   |   - Elapsed Time & Status     - JSON Download              - Mixer Check / Reset      |   |
-|   |   - DP-Gram Chart (Chart.js)  - Print / Save Clinical PDF                             |   |
-|   |   - State Hydration on Wake   - Central State (`store.js`)                            |   |
+|   | [ Tab 1: Screening ]   [ Tab 2: Records ]   [ Tab 3: Settings ]  [ Tab 4: Dev / Lab* ]|   |
+|   | - Patient & Notes      - Search Patient ID  - USB Audio Badge    - FFT Spectrum Plot  |   |
+|   | - Guided Bilateral     - Bilateral Grouping - Mock / Live Toggle - Waveform & Clipping|   |
+|   | - Step Progress        - DP-Gram Inspect    - Profile Selector   - Manual Tone Test   |   |
+|   | - Elapsed Time/Status  - JSON Download      - Mixer Check/Reset  - WAV Audio Player   |   |
+|   | - DP-Gram (Chart.js)   - Print / Save PDF   - Dev Mode Toggle    - Live Log Console   |   |
+|   | - Wake Hydration       - Central State (`store.js`)              - Param Overrides    |   |
 |   +-------------------------------------------^-------------------------------------------+   |
 +-----------------------------------------------|-----------------------------------------------+
                                                 | Local Network (Air-Gapped Hotspot or LAN)
@@ -41,7 +41,7 @@
 |   |   - Auto-Mixer Guardian  : Verifies & applies ALSA mixer gains before every live test  |   |
 |   |   - Session Supervisor   : Spawns `dpoae-rpi --json-stream` via `create_subprocess_exec`|
 |   |   - State Persistence    : In-memory active session state survives tablet sleep/wake  |   |
-|   |   - SSE Telemetry Stream : Broadcasts real-time events to all connected clients       |   |
+|   |   - SSE Telemetry Stream : Broadcasts real-time events (+ `stderr` in Dev Mode)       |   |
 |   +-------------------------------------------^-------------------------------------------+   |
 |                                               |                                               |
 |                                               v                                               |
@@ -49,13 +49,15 @@
 |   |                           Native C++ Engine (`dpoae-rpi`)                             |   |
 |   |                                                                                       |   |
 |   |   - NDJSON Stream Engine : `--json-stream` emits flushed JSON lines per event         |   |
+|   |   - Dev Telemetry & Bench: `--dev-telemetry` (FFT/clip stats) & `--tone-test` loopback|   |
 |   |   - Audio I/O            : ALSA Duplex via Miniaudio (UGREEN 80864 48 kHz / 16-bit)   |   |
 |   |   - Signal Generation    : Dual-tone stereophonic f1/f2, chirps, 226 Hz probe tone    |   |
 |   |   - DSP Engine           : Bluestein FFT, SNR calculation, `ampCheck` rejection       |   |
-|   |   - Acoustic Safety      : Immediate mute & clean ALSA device release on SIGTERM      |   |
+|   |   - Acoustic Safety      : Hard output ceiling & immediate mute/ALSA release on SIGTERM|  |
 |   |   - Storage              : Writes uncompressed mono WAVs and structured JSON records  |   |
 |   +---------------------------------------------------------------------------------------+   |
 +-----------------------------------------------------------------------------------------------+
+* Tab 4 (Dev / Lab) is hidden by default and unlocked via Settings toggle or `?dev=1` URL param.
 ```
 
 ---
@@ -135,7 +137,7 @@
 ### 2.8 Single-Hardware Concurrency Lock
 - **Problem**: Multiple devices or browser tabs connected to the Pi could trigger concurrent tests, corrupting the single ALSA duplex audio stream.
 - **Solution**:
-  - `session_manager.py` enforces an `asyncio.Lock()`. If a test is in progress, any secondary `POST /api/test/start` immediately receives `HTTP 409 Conflict` with `{ "error": "A screening test is already active." }`.
+  - `session_manager.py` enforces an `asyncio.Lock()`. If a test is in progress, any secondary `POST /api/test/start` or `POST /api/dev/tone-test` immediately receives `HTTP 409 Conflict` with `{ "error": "A screening test is already active." }`.
 
 ### 2.9 Acoustic Safety & Clean Subprocess Termination
 - **Problem**: Abruptly terminating an audio test can leave a continuous tone sounding in the patient's ear or lock the ALSA device (`EBUSY`).
@@ -143,6 +145,16 @@
   - On `POST /api/test/stop`, Python sends `SIGTERM` to `dpoae-rpi`.
   - `dpoae-rpi` traps `SIGTERM`/`SIGINT`, immediately stops the audio engine stream, releases ALSA devices, and exits.
   - Python allows a 2-second grace timeout before escalating to `SIGKILL`.
+
+### 2.10 Developer / Lab Mode (Opt-In Diagnostics & Guardrails)
+- **Problem**: During hardware bring-up and DSP tuning, developers need to inspect full FFT spectra, mic clipping, raw WAV recordings, and manual speaker/mic loopback tones—without cluttering the clinical UI or overloading the Pi's Wi-Fi/browser with raw 48 kHz audio streams.
+- **Solution**:
+  - **Opt-In Activation with Safety Confirmation**: Hidden by default; enabled via a toggle in Settings (or `?dev=1` query param), which displays a confirmation prompt (*"I understand..."*) before unlocking **Tab 4: Developer / Lab** and persisting the unlock in `localStorage`.
+  - **Explicit Override Guard**: Parameter overrides only apply to screening runs when an explicit **"Use Parameter Overrides"** checkbox is checked in Tab 4, paired with a visible **"Dev Overrides Active"** warning pill on Tab 1.
+  - **Bandwidth Guardrails**: Never stream raw 48 kHz PCM over SSE. Emit lightweight summary stats (peak dBFS, RMS, clipped sample count) via SSE, and fetch decimated FFT spectrum arrays (~512 bins in 500 Hz–6 kHz), downsampled waveform envelopes (~500 points), and WAV files on demand via REST.
+  - **Zero Clinical Overhead**: Extra spectrum/envelope serialization in C++ is gated behind `--dev-telemetry`.
+  - **Hardware-Only Tone Test & Safety Ceiling**: `POST /api/dev/tone-test` requires a live USB audio device (returning `503` if disconnected), and `dpoae-rpi` enforces a hard maximum output amplitude clamp (`0.60`) in C++.
+  - **Ephemeral Live Console**: `cmd`, `stderr`, and raw NDJSON events stream live over SSE into a collapsible console drawer without retaining persistent log buffers across page refreshes.
 
 ---
 
@@ -172,13 +184,15 @@ dpoae-rpi/
 │           ├── screening.js            # Start/stop, Guided Bilateral flow, SSE event listeners
 │           ├── dpgram_chart.js         # Chart.js DP-Gram rendering with relative SNR fill
 │           ├── records.js              # Historical records list, search, view modal, JSON export
-│           └── settings.js             # Mock toggle, profile select, audio check
+│           ├── settings.js             # Mock toggle, profile select, audio check, Dev Mode toggle
+│           └── dev.js                  # Dev/Lab tab: FFT spectrum, waveform, tone test, WAV player, logs
 ```
 
 ---
 
-## 4. C++ Engine Extension: `--json-stream` NDJSON Protocol
+## 4. C++ Engine Extension: `--json-stream`, `--dev-telemetry` & `--tone-test`
 
+### 4.1 `--json-stream` NDJSON Protocol
 To eliminate stdout block-buffering and fragile regex parsing, `dpoae-rpi` will accept `--json-stream`. When active, every key event is output on stdout as a single JSON line followed by `std::flush`:
 
 ```json
@@ -200,6 +214,17 @@ If an error or abort occurs:
 {"event": "error", "message": "Could not open ALSA duplex audio interface"}
 ```
 
+### 4.2 `--dev-telemetry` Flag
+When passed alongside `--json-stream`:
+- Emits lightweight audio health metrics (`peak_dbfs`, `rms_dbfs`, `clipped_samples`) per frequency pair.
+- Writes a sidecar spectrum/envelope JSON file (e.g., `results/<run>-dev.json`) containing decimated FFT magnitude bins (500 Hz–6 kHz, ~512 points) with $f_1$, $f_2$, $2f_1 - f_2$, and noise-floor bin markers, plus a ~500-point min/max time-domain waveform envelope.
+
+### 4.3 `--tone-test` Bench Subcommand
+Executes a short duplex playback + capture sanity check (e.g., `--tone-test --channel left --freq 1000 --duration 2 --amp 0.2 --json-stream`), clamping amplitude to a hard C++ safety ceiling and emitting:
+```json
+{"event": "tone_test_result", "channel": "left", "target_hz": 1000, "measured_peak_hz": 1000.2, "rms_dbfs": -18.4, "peak_dbfs": -12.1, "clipped_samples": 0, "latency_ms": 11.4, "wav_file": "results/tone-test-1795338500.wav"}
+```
+
 ---
 
 ## 5. REST & SSE API Specification
@@ -208,7 +233,7 @@ If an error or abort occurs:
 - **`GET /api/status`**:
   - Returns hardware audio card connection status and current active session state (for hydration on wake/reload).
 - **`GET /api/telemetry/stream`**:
-  - Server-Sent Events (SSE) stream (`text/event-stream`). Emits real-time NDJSON events as they occur.
+  - Server-Sent Events (SSE) stream (`text/event-stream`). Emits real-time NDJSON events as they occur. When Dev Mode is active, also emits `{"event": "stderr", "line": "..."}` and `{"event": "cmd", "argv": [...]}`.
 
 ### 5.2 Screening Execution Endpoints
 - **`POST /api/test/start`**:
@@ -223,7 +248,9 @@ If an error or abort occurs:
       "profile": "ugreen_80864_rpi5",
       "mock": false,
       "fit_check": false,
-      "vol_calib": false
+      "vol_calib": false,
+      "dev_telemetry": false,
+      "overrides": {} // Optional Dev Mode parameter overrides
     }
     ```
   - Response: `200 OK` `{ "status": "started", "session_id": "..." }` or `409 Conflict` if busy.
@@ -243,6 +270,20 @@ If an error or abort occurs:
 - **`POST /api/hardware/verify`**:
   - Checks `/proc/asound/cards` and runs `amixer` to verify gain lock without `sudo`.
   - Returns card name, gain levels, and status.
+
+### 5.5 Developer & Lab Endpoints
+- **`POST /api/dev/tone-test`**:
+  - Acquires the same `asyncio.Lock` hardware mutex (returns `409 Conflict` if a screening is active) and requires live USB audio hardware (`503` if disconnected; locks ALSA mixer automatically).
+  - Body: `{ "channel": "left" | "right" | "both", "freq_hz": 1000, "f2_hz": null, "duration_s": 2, "amplitude": 0.2 }`.
+  - Runs `dpoae-rpi --tone-test --json-stream` and returns measured peak frequency, RMS/peak dBFS, clipping count, latency, and WAV filename.
+- **`GET /api/dev/runs`**:
+  - Lists available `*-dev.json` sidecar files in `./results/` (newest first) for the Recent Dev Runs selector.
+- **`GET /api/dev/wav/{filename}`**:
+  - Validates path is strictly within `./results/` and ends with `.wav`.
+  - Streams uncompressed WAV via `FileResponse` for browser `<audio controls>` playback or download.
+- **`GET /api/dev/spectrum/{filename}`**:
+  - Validates path is strictly within `./results/` and ends with `-dev.json`.
+  - Returns the decimated FFT spectrum bins and waveform envelope JSON generated by `--dev-telemetry`.
 
 ---
 
@@ -273,3 +314,21 @@ If an error or abort occurs:
   - Verify tablet sleep/reload recovery (reconnects and resumes UI state seamlessly).
   - Verify `@media print` clinical report layout.
   - Verify offline hotspot execution (no external HTTP network calls).
+- [x] **Stage 5: C++ Developer Telemetry & Tone-Test CLI (`dpoae-rpi`)**:
+  - Add `--dev-telemetry` flag to compute and write decimated FFT magnitude spectra (500 Hz–6 kHz), peak/RMS dBFS, clipped sample counts, and ~500-point waveform envelopes to a sidecar JSON file.
+  - Add `--tone-test` subcommand supporting Left/Right/Both channel routing, single-tone or $f_1/f_2$ playback, duplex recording, and peak frequency / latency measurement.
+  - Enforce a hard maximum output amplitude ceiling in C++ for acoustic safety.
+- [x] **Stage 6: Backend Developer Endpoints & `stderr` Streaming (`gui/app/`)**:
+  - Update `session_manager.py` to support `--dev-telemetry`, CLI parameter overrides (`--snr-threshold`, `--tone-seconds`, `--min-pass-freqs`, `--amp-threshold`, `--art-threshold`), and async `stderr` reading (emitting `{"event": "stderr", "line": "..."}` and executed `argv` over SSE).
+  - Add `POST /api/dev/tone-test` sharing the `asyncio.Lock` hardware mutex (`409 Conflict` when busy, `503` when USB audio disconnected) and auto-locking ALSA mixer.
+  - Add `GET /api/dev/runs` (excluding `*-dev.json` from clinical `GET /api/records` list), path-validated `GET /api/dev/wav/{filename}` (`FileResponse`), and `GET /api/dev/spectrum/{filename}` endpoints in `main.py`.
+- [x] **Stage 7: Frontend Developer / Lab Tab (`gui/static/js/dev.js`)**:
+  - Add opt-in Developer Mode toggle in `settings.js` (plus `?dev=1` URL activation) gated by a confirmation prompt (*"I understand..."*) persisted in `localStorage` to show/hide **Tab 4: Developer / Lab**.
+  - Build **FFT Spectrum Inspector** (auto-loads latest run + Recent Dev Runs selector, frequency pair 1–4 tabs, Chart.js plot with $f_1$, $f_2$, $2f_1 - f_2$, and noise-floor markers) and **Waveform & Clipping Panel** (Peak/RMS dBFS, clip count, min/max envelope, pair WAV `<audio controls>`).
+  - Build **Manual Tone & Loopback Bench Test** form with channel/frequency/duration/amplitude controls and **WAV Audio Player**.
+  - Add **Parameter Overrides** form with explicit **"Use Parameter Overrides"** checkbox and **"Dev Overrides Active"** warning pill on Tab 1, plus collapsible ephemeral **Live Telemetry & `stderr` Console**.
+- [x] **Stage 8: Developer Mode Verification & Safety Testing**:
+  - Verify Developer Mode remains completely hidden in default clinical mode.
+  - Verify `POST /api/dev/tone-test` returns `409 Conflict` if a screening test is running, and confirm C++ clamps out-of-range amplitude values.
+  - Verify FFT spectrum markers ($f_1$, $f_2$, $2f_1 - f_2$), waveform clipping metrics, and WAV playback work offline on a tablet/laptop browser.
+  - Verify live `stderr` and raw NDJSON events stream cleanly in the console drawer without lagging the UI.

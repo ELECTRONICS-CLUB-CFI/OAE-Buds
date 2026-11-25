@@ -43,11 +43,41 @@ double calc_art(const std::vector<double>& spec_power, uint32_t max_bin = 6000);
 // Evaluates power at track_tone_bin vs. +/-200 Hz sideband average (with +/-2 bin guard)
 SnrResult calc_snr(const std::vector<double>& spec_power, uint32_t seglen, uint32_t track_tone_bin);
 
+struct AudioHealthMetrics {
+    double peak_dbfs = -120.0;
+    double rms_dbfs = -120.0;
+    uint32_t clipped_samples = 0;
+};
+
+struct WaveformEnvelope {
+    std::vector<int16_t> min_vals;
+    std::vector<int16_t> max_vals;
+};
+
+struct DecimatedSpectrum {
+    std::vector<double> freqs_hz;
+    std::vector<double> magnitudes_db;
+};
+
+// Compute peak dBFS, RMS dBFS, and clipped sample count (|s| >= 32767)
+AudioHealthMetrics compute_audio_health(std::span<const int16_t> samples);
+
+// Downsample time-domain signal into min/max envelope buckets for UI plotting
+WaveformEnvelope compute_waveform_envelope(std::span<const int16_t> samples, size_t target_points = 500);
+
+// Peak-hold decimation of power spectrum into dB magnitudes across [min_hz, max_hz]
+DecimatedSpectrum decimate_spectrum_db(const std::vector<double>& spec_power,
+                                       uint32_t sample_rate,
+                                       double min_hz = 500.0,
+                                       double max_hz = 6000.0,
+                                       size_t num_points = 512);
+
 // Coherent averaging, artifact rejection, power spectrum, and DPOAE SNR evaluation
 // Implements the complete Signal.work() pipeline from Android Java
 DpoaeResult process_frequency_pair(std::span<const int16_t> raw_recording,
                                    const FrequencyPair& pair,
-                                   const OaeConfig& config);
+                                   const OaeConfig& config,
+                                   std::vector<double>* out_spec_power = nullptr);
 
 // Real-to-complex FFT returning squared magnitude (power spectrum) of length N/2 + 1
 std::vector<double> compute_power_spectrum(const std::vector<double>& time_data);

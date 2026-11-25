@@ -209,12 +209,16 @@ def get_config_metadata(config_path: Path) -> dict[str, Any]:
     test_cfg = data.get("test", {})
     fit_cfg = data.get("fit_check", {})
     vol_cfg = data.get("volume_calibration", {})
+    art_cfg = data.get("artifact_rejection", {})
 
     return {
         "profiles": profiles,
         "default_profile": "ugreen_80864_rpi5",
         "snr_threshold_db": float(test_cfg.get("snr_threshold_db", 7.0)),
+        "constant_tone_seconds": int(test_cfg.get("constant_tone_seconds", 5)),
         "pass_rule_min_frequencies": int(test_cfg.get("pass_rule_min_frequencies", 3)),
+        "amp_threshold": int(art_cfg.get("amp_threshold", 500)),
+        "art_threshold_db": float(art_cfg.get("art_threshold_db", 4.0)),
         "fit_check_default": bool(fit_cfg.get("enabled", False)),
         "vol_calib_default": bool(vol_cfg.get("enabled", True)),
     }

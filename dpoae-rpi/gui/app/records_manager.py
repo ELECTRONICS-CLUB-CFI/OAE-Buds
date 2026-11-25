@@ -17,8 +17,13 @@ class RecordsManager:
     def __init__(self, results_dir: Path) -> None:
         self.results_dir = results_dir
 
-    def _safe_resolve(self, filename: str) -> Path:
-        if not filename or "/" in filename or "\\" in filename or not filename.endswith(".json"):
+    def _safe_resolve(self, filename: str, required_suffix: str = ".json") -> Path:
+        if (
+            not filename
+            or "/" in filename
+            or "\\" in filename
+            or not filename.endswith(required_suffix)
+        ):
             raise InvalidRecordPathError("Invalid record filename.")
 
         base = self.results_dir.resolve()
@@ -29,7 +34,7 @@ class RecordsManager:
 
     def get_record(self, filename: str) -> dict[str, Any] | None:
         """Safely read and return a single JSON record by filename."""
-        path = self._safe_resolve(filename)
+        path = self._safe_resolve(filename, required_suffix=".json")
         if not path.is_file():
             return None
         try:
@@ -40,6 +45,57 @@ class RecordsManager:
         except (OSError, json.JSONDecodeError):
             return None
         return None
+
+    def get_dev_spectrum(self, filename: str) -> dict[str, Any] | None:
+        """Safely read and return a decimated FFT spectrum & envelope sidecar (-dev.json)."""
+        path = self._safe_resolve(filename, required_suffix="-dev.json")
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.setdefault("filename", filename)
+                return data
+        except (OSError, json.JSONDecodeError):
+            return None
+        return None
+
+    def get_wav_path(self, filename: str) -> Path | None:
+        """Safely resolve a WAV recording path inside results_dir."""
+        path = self._safe_resolve(filename, required_suffix=".wav")
+        if not path.is_file():
+            return None
+        return path
+
+    def list_dev_runs(self, limit: int = 30) -> list[dict[str, Any]]:
+        """List available -dev.json telemetry sidecar files sorted newest first."""
+        if not self.results_dir.exists():
+            return []
+
+        runs: list[dict[str, Any]] = []
+        for path in self.results_dir.glob("*-dev.json"):
+            if not path.is_file():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    continue
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            mtime_ms = int(path.stat().st_mtime * 1000)
+            runs.append({
+                "filename": path.name,
+                "session_id": str(data.get("session_id", "")),
+                "patient_id": str(data.get("patient_id", "0")),
+                "ear": str(data.get("ear", "left")),
+                "sample_rate": int(data.get("sample_rate", 48000)),
+                "pair_count": len(data.get("pairs", [])),
+                "timestamp_ms": mtime_ms,
+            })
+
+        runs.sort(key=lambda r: r["timestamp_ms"], reverse=True)
+        return runs[: max(1, limit)]
 
     def list_records(
         self,
@@ -54,7 +110,7 @@ class RecordsManager:
 
         raw_entries: list[dict[str, Any]] = []
         for path in self.results_dir.glob("*.json"):
-            if not path.is_file():
+            if not path.is_file() or path.name.endswith("-dev.json"):
                 continue
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))

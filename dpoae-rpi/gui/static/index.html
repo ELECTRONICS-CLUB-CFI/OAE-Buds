@@ -4,6 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>OAE Buds — DPOAE Hearing Screening</title>
+  <script>
+    (function () {
+      try {
+        var raw = localStorage.getItem("oae_buds_gui_settings_v1");
+        var theme = (raw && JSON.parse(raw).theme) || "auto";
+        var effective = theme === "auto"
+          ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : theme;
+        document.documentElement.setAttribute("data-theme", effective);
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="/static/css/app.css" />
   <script src="/static/vendor/chart.umd.min.js" defer></script>
   <script type="module" src="/static/js/app.js" defer></script>
@@ -35,6 +47,16 @@
           <span class="dot"></span>
           <span id="badge-sse-text">Connecting...</span>
         </span>
+        <button type="button" id="btn-theme-toggle" class="theme-toggle-btn" aria-label="Toggle Dark Mode" title="Toggle Dark / Light Mode">
+          <svg id="icon-theme-moon" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+          <svg id="icon-theme-sun" class="icon hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5" />
+            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+          </svg>
+          <span id="theme-toggle-label">Dark</span>
+        </button>
       </div>
     </header>
 
@@ -61,6 +83,12 @@
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
         <span>Settings &amp; Diag</span>
+      </button>
+      <button type="button" id="tab-btn-dev" class="tab-btn hidden" data-tab="dev" role="tab" aria-selected="false">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />
+        </svg>
+        <span>Dev / Lab</span>
       </button>
     </nav>
 
@@ -115,6 +143,8 @@
             <div id="setup-hw-warning" class="alert alert-warning full-width hidden">
               UGREEN 80864 USB Audio Adapter is not detected. Plug in the USB probe or enable <strong>Mock / Demo Mode</strong> above to test offline.
             </div>
+
+            <div id="setup-dev-overrides-pill" class="alert alert-warning full-width hidden"></div>
 
             <div id="setup-error" class="alert alert-danger full-width hidden"></div>
 
@@ -266,6 +296,15 @@
 
             <div class="form-stack">
               <div class="form-group">
+                <label for="setting-theme">Appearance Theme</label>
+                <select id="setting-theme">
+                  <option value="auto">Auto (Follow Device)</option>
+                  <option value="light">Light Mode</option>
+                  <option value="dark">Dark Mode</option>
+                </select>
+              </div>
+
+              <div class="form-group">
                 <label for="setting-profile">Hardware Profile</label>
                 <select id="setting-profile"></select>
               </div>
@@ -286,6 +325,12 @@
                 <input type="checkbox" id="setting-vol-calib" />
                 <span class="toggle-slider"></span>
                 <span class="toggle-label">Enable In-Ear Volume Calibration (--vol-calib)</span>
+              </label>
+
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-dev-mode" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Developer / Lab Mode (FFT, Tone Test &amp; Overrides)</span>
               </label>
             </div>
           </div>
@@ -309,7 +354,163 @@
           </div>
         </div>
       </section>
+
+      <!-- TAB 4: DEVELOPER / LAB (Opt-In Only) -->
+      <section id="panel-dev" class="tab-panel hidden no-print">
+        <div class="card">
+          <div class="card-header">
+            <h2>FFT Spectrum &amp; Waveform Inspector</h2>
+            <p class="muted">Inspect decimated 500 Hz–6 kHz FFT spectra, clipping stats, and min/max PCM envelopes.</p>
+          </div>
+
+          <div class="dev-run-toolbar">
+            <select id="dev-run-select" aria-label="Select Dev Run"></select>
+            <button type="button" id="btn-dev-refresh-runs" class="btn btn-outline btn-sm">Refresh</button>
+          </div>
+
+          <div id="dev-pair-tabs" class="pair-tabs"></div>
+          <div id="dev-pair-metrics" class="dev-metrics-row"></div>
+
+          <div class="dev-grid">
+            <div>
+              <div class="chart-box"><canvas id="dev-fft-canvas"></canvas></div>
+            </div>
+            <div>
+              <div class="chart-box"><canvas id="dev-wave-canvas"></canvas></div>
+            </div>
+          </div>
+
+          <div class="wav-player-row">
+            <audio id="dev-pair-audio" controls></audio>
+            <a id="dev-pair-wav-dl" class="btn btn-outline btn-sm hidden" href="#">Download Pair WAV</a>
+          </div>
+        </div>
+
+        <div class="dev-grid">
+          <!-- Manual Tone & Loopback Bench Test -->
+          <div class="card">
+            <div class="card-header">
+              <h2>Manual Tone &amp; Loopback Bench Test</h2>
+              <p class="muted">Live USB audio hardware test with C++ 0.60 amplitude safety ceiling.</p>
+            </div>
+
+            <div id="dev-tone-hw-warn" class="alert alert-warning hidden" style="margin-bottom:0.85rem;">
+              Live USB audio hardware required. Connect UGREEN 80864 adapter to run tone test.
+            </div>
+            <div id="dev-tone-error" class="alert alert-danger hidden" style="margin-bottom:0.85rem;"></div>
+
+            <form id="dev-tone-form" class="form-grid">
+              <div class="form-group">
+                <label for="tone-channel">Output Channel</label>
+                <select id="tone-channel">
+                  <option value="left">Left (f1)</option>
+                  <option value="right">Right (f2)</option>
+                  <option value="both">Both (Dual-Tone)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="tone-freq">Primary Freq (Hz)</label>
+                <input id="tone-freq" type="number" min="50" max="20000" step="1" value="1000" required />
+              </div>
+              <div class="form-group">
+                <label for="tone-f2">Secondary f2 (Hz, Optional)</label>
+                <input id="tone-f2" type="number" min="50" max="20000" step="1" placeholder="e.g., 2016" />
+              </div>
+              <div class="form-group">
+                <label for="tone-duration">Duration (s)</label>
+                <input id="tone-duration" type="number" min="0.2" max="10" step="0.1" value="2.0" required />
+              </div>
+              <div class="form-group full-width">
+                <label for="tone-amp">Amplitude (0.01 – 0.60 max safe)</label>
+                <input id="tone-amp" type="number" min="0.01" max="1.0" step="0.01" value="0.20" required />
+              </div>
+              <div class="form-actions full-width">
+                <button type="submit" id="btn-run-tone-test" class="btn btn-primary btn-lg">Run Live Tone Test</button>
+              </div>
+            </form>
+
+            <div id="dev-tone-result" class="verify-output hidden"></div>
+          </div>
+
+          <!-- Parameter Overrides -->
+          <div class="card">
+            <div class="card-header">
+              <h2>DSP Parameter Overrides</h2>
+              <p class="muted">Explicitly override screening thresholds without editing oae_config.toml.</p>
+            </div>
+
+            <div class="form-stack">
+              <label class="toggle-switch">
+                <input type="checkbox" id="dev-use-overrides" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label"><strong>Use Parameter Overrides</strong> on Screening Runs</span>
+              </label>
+
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="ov-snr">SNR Threshold (dB)</label>
+                  <input id="ov-snr" type="number" step="0.5" value="7.0" />
+                </div>
+                <div class="form-group">
+                  <label for="ov-tone-sec">Tone Duration (s)</label>
+                  <input id="ov-tone-sec" type="number" min="1" max="20" step="1" value="5" />
+                </div>
+                <div class="form-group">
+                  <label for="ov-min-freqs">Min Pass Freqs</label>
+                  <input id="ov-min-freqs" type="number" min="1" max="4" step="1" value="3" />
+                </div>
+                <div class="form-group">
+                  <label for="ov-amp">Amp Check Threshold</label>
+                  <input id="ov-amp" type="number" min="1" step="10" value="500" />
+                </div>
+                <div class="form-group full-width">
+                  <label for="ov-art">Artifact Jump Threshold (dB)</label>
+                  <input id="ov-art" type="number" min="0.5" step="0.5" value="4.0" />
+                </div>
+              </div>
+
+              <div class="form-actions">
+                <button type="button" id="btn-reset-overrides" class="btn btn-outline btn-sm">Reset to Config Defaults</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ephemeral Live Telemetry & stderr Console -->
+        <div class="card">
+          <div class="console-header">
+            <div>
+              <h2 style="margin:0;font-size:1.05rem;">Live Telemetry &amp; stderr Console</h2>
+              <p class="muted">Ephemeral stream of executed CLI argv, stderr lines, and raw NDJSON events.</p>
+            </div>
+            <div class="console-actions">
+              <button type="button" id="btn-clear-console" class="btn btn-outline btn-sm">Clear</button>
+              <button type="button" id="btn-toggle-console" class="btn btn-outline btn-sm">Show Console</button>
+            </div>
+          </div>
+          <div id="dev-console-body" class="hidden">
+            <pre id="dev-console-log" class="console-log"></pre>
+          </div>
+        </div>
+      </section>
     </main>
+  </div>
+
+  <!-- Dev Mode Confirmation Modal -->
+  <div id="dev-confirm-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-dialog" style="max-width:520px;">
+      <div class="modal-header">
+        <h3>Enable Developer / Lab Mode?</h3>
+      </div>
+      <div class="modal-body">
+        <p style="margin-top:0;">Developer Mode unlocks raw FFT spectrum inspection, manual acoustic tone generation, and clinical parameter overrides.</p>
+        <p class="muted">Do not use unvalidated parameter overrides for clinical patient screening.</p>
+        <div class="toolbar-buttons" style="margin-top:1.25rem;justify-content:flex-end;">
+          <button type="button" id="btn-dev-cancel" class="btn btn-outline">Cancel</button>
+          <button type="button" id="btn-dev-confirm" class="btn btn-primary">I Understand — Unlock Dev Mode</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Record Detail Modal -->

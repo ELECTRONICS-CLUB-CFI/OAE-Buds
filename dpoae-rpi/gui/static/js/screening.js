@@ -2,8 +2,9 @@
  * Screening Controller: Setup, Guided Bilateral Flow, SSE Telemetry, Elapsed Timer, & Results
  */
 
-import { store, notify, updateSettings, hydrateFromServer } from "./store.js";
+import { store, notify, updateSettings, hydrateFromServer, getEffectiveTheme, appendDevLog } from "./store.js";
 import { buildEarCardHtml, destroyChart, escapeHtml, renderDpGramChart } from "./dpgram_chart.js";
+import { fetchDevRuns, loadDevSpectrum } from "./dev.js";
 
 let eventSource = null;
 let elapsedTimerHandle = null;
@@ -45,6 +46,16 @@ function ensureElapsedTicker() {
 function handleTelemetryEvent(ev) {
   if (!ev || !ev.event) return;
   const s = store.activeSession;
+
+  if (store.settings.dev_mode && ev.event !== "sync") {
+    if (ev.event === "cmd") {
+      appendDevLog("CMD", (ev.argv || []).join(" "));
+    } else if (ev.event === "stderr") {
+      appendDevLog("STDERR", ev.line || "");
+    } else {
+      appendDevLog(ev.event.toUpperCase(), JSON.stringify(ev));
+    }
+  }
 
   switch (ev.event) {
     case "sync":
@@ -96,6 +107,12 @@ function handleTelemetryEvent(ev) {
       if (ev.summary) {
         if (ev.ear === "left") s.left_result = ev.summary;
         if (ev.ear === "right") s.right_result = ev.summary;
+      }
+      if (ev.dev_filename) {
+        s.dev_file = ev.dev_filename;
+        if (store.settings.dev_mode) {
+          fetchDevRuns().then(() => loadDevSpectrum(ev.dev_filename));
+        }
       }
       if (s.workflow === "bilateral" && ev.ear === "left" && !s.right_result) {
         s.state = "waiting_for_next_ear";
@@ -184,9 +201,20 @@ async function startScreeningRequest(payload) {
   }
 }
 
+function buildStartPayload(base) {
+  const devMode = Boolean(store.settings.dev_mode);
+  const ovEnabled = devMode && Boolean(store.settings.dev_overrides_enabled);
+  return {
+    ...base,
+    dev_telemetry: devMode,
+    overrides: ovEnabled ? store.settings.dev_overrides || {} : null,
+  };
+}
+
 function renderSetupView() {
   const mockToggle = document.getElementById("setup-mock-toggle");
   const hwWarning = document.getElementById("setup-hw-warning");
+  const ovPill = document.getElementById("setup-dev-overrides-pill");
   const startBtn = document.getElementById("btn-start-test");
 
   if (mockToggle) {
@@ -196,6 +224,14 @@ function renderSetupView() {
   const liveBlocked = !store.settings.mock && !store.audioDevice.connected;
   if (hwWarning) {
     hwWarning.classList.toggle("hidden", !liveBlocked);
+  }
+  if (ovPill) {
+    const activeOv = Boolean(store.settings.dev_mode && store.settings.dev_overrides_enabled);
+    ovPill.classList.toggle("hidden", !activeOv);
+    if (activeOv) {
+      const ov = store.settings.dev_overrides || {};
+      ovPill.innerHTML = `<strong>Dev Overrides Active:</strong> SNR=${ov.snr_threshold_db ?? store.config.snr_threshold_db} dB, Tone=${ov.constant_tone_seconds ?? store.config.constant_tone_seconds}s, MinPass=${ov.pass_rule_min_frequencies ?? store.config.pass_rule_min_frequencies}`;
+    }
   }
   if (startBtn) {
     startBtn.disabled = liveBlocked;
@@ -307,7 +343,8 @@ function renderResultsView() {
   alertCard.classList.add("hidden");
   reportCard.classList.remove("hidden");
 
-  const resultKey = `${s.session_id}:${Boolean(s.left_result)}:${Boolean(s.right_result)}`;
+  const activeTheme = document.documentElement.getAttribute("data-theme") || getEffectiveTheme();
+  const resultKey = `${s.session_id}:${Boolean(s.left_result)}:${Boolean(s.right_result)}:${activeTheme}`;
   if (resultKey === lastRenderedResultKey) {
     return;
   }
@@ -408,16 +445,18 @@ export function initScreening() {
     const notes = document.getElementById("input-notes").value.trim();
     if (!patientId) return;
 
-    await startScreeningRequest({
-      patient_id: patientId,
-      notes,
-      ear: selectedEar,
-      workflow: selectedWorkflow,
-      profile: store.settings.profile,
-      mock: store.settings.mock,
-      fit_check: store.settings.fit_check,
-      vol_calib: store.settings.vol_calib,
-    });
+    await startScreeningRequest(
+      buildStartPayload({
+        patient_id: patientId,
+        notes,
+        ear: selectedEar,
+        workflow: selectedWorkflow,
+        profile: store.settings.profile,
+        mock: store.settings.mock,
+        fit_check: store.settings.fit_check,
+        vol_calib: store.settings.vol_calib,
+      })
+    );
   });
 
   // Stop test
@@ -429,17 +468,19 @@ export function initScreening() {
   // Guided Bilateral Continue (Right Ear)
   document.getElementById("btn-continue-right").addEventListener("click", async () => {
     const s = store.activeSession;
-    await startScreeningRequest({
-      session_id: s.session_id,
-      patient_id: s.patient_id,
-      notes: s.notes,
-      ear: "right",
-      workflow: "bilateral",
-      profile: s.profile || store.settings.profile,
-      mock: s.mock,
-      fit_check: s.fit_check,
-      vol_calib: s.vol_calib,
-    });
+    await startScreeningRequest(
+      buildStartPayload({
+        session_id: s.session_id,
+        patient_id: s.patient_id,
+        notes: s.notes,
+        ear: "right",
+        workflow: "bilateral",
+        profile: s.profile || store.settings.profile,
+        mock: s.mock,
+        fit_check: s.fit_check,
+        vol_calib: s.vol_calib,
+      })
+    );
   });
 
   // Finish Bilateral Early with Left Ear Only
@@ -460,17 +501,19 @@ export function initScreening() {
   document.getElementById("btn-test-other-ear").addEventListener("click", async () => {
     const s = store.activeSession;
     const nextEar = s.left_result ? "right" : "left";
-    await startScreeningRequest({
-      session_id: s.session_id,
-      patient_id: s.patient_id,
-      notes: s.notes,
-      ear: nextEar,
-      workflow: "bilateral",
-      profile: s.profile || store.settings.profile,
-      mock: s.mock,
-      fit_check: s.fit_check,
-      vol_calib: s.vol_calib,
-    });
+    await startScreeningRequest(
+      buildStartPayload({
+        session_id: s.session_id,
+        patient_id: s.patient_id,
+        notes: s.notes,
+        ear: nextEar,
+        workflow: "bilateral",
+        profile: s.profile || store.settings.profile,
+        mock: s.mock,
+        fit_check: s.fit_check,
+        vol_calib: s.vol_calib,
+      })
+    );
   });
 
   // Print / Save PDF

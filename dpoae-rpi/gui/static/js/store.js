@@ -32,7 +32,10 @@ export const store = {
     profiles: [{ name: "ugreen_80864_rpi5", description: "UGREEN 80864 (RPi5)" }],
     default_profile: "ugreen_80864_rpi5",
     snr_threshold_db: 7.0,
+    constant_tone_seconds: 5,
     pass_rule_min_frequencies: 3,
+    amp_threshold: 500,
+    art_threshold_db: 4.0,
     fit_check_default: false,
     vol_calib_default: true,
   },
@@ -41,6 +44,10 @@ export const store = {
     mock: typeof saved.mock === "boolean" ? saved.mock : false,
     fit_check: typeof saved.fit_check === "boolean" ? saved.fit_check : false,
     vol_calib: typeof saved.vol_calib === "boolean" ? saved.vol_calib : true,
+    theme: ["auto", "light", "dark"].includes(saved.theme) ? saved.theme : "auto",
+    dev_mode: typeof saved.dev_mode === "boolean" ? saved.dev_mode : false,
+    dev_overrides_enabled: typeof saved.dev_overrides_enabled === "boolean" ? saved.dev_overrides_enabled : false,
+    dev_overrides: saved.dev_overrides && typeof saved.dev_overrides === "object" ? saved.dev_overrides : {},
   },
   activeSession: {
     session_id: null,
@@ -74,7 +81,26 @@ export const store = {
     verdict: "",
     ear: "",
   },
+  dev: {
+    runs: [],
+    selectedRunFilename: null,
+    spectrumData: null,
+    selectedPairIndex: 0,
+    toneTestBusy: false,
+    toneTestResult: null,
+    toneTestError: null,
+    consoleLogs: [],
+    consoleOpen: false,
+  },
 };
+
+export function appendDevLog(kind, text) {
+  const ts = new Date().toLocaleTimeString([], { hour12: false });
+  store.dev.consoleLogs.push({ ts, kind, text });
+  if (store.dev.consoleLogs.length > 300) {
+    store.dev.consoleLogs.shift();
+  }
+}
 
 const listeners = new Set();
 
@@ -93,8 +119,35 @@ export function notify() {
   }
 }
 
+export function getEffectiveTheme() {
+  const pref = store.settings.theme || "auto";
+  if (pref === "dark" || pref === "light") return pref;
+  const prefersDark =
+    typeof window !== "undefined" &&
+    window.matchMedia &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches;
+  return prefersDark ? "dark" : "light";
+}
+
+export function applyTheme() {
+  if (typeof document !== "undefined") {
+    document.documentElement.setAttribute("data-theme", getEffectiveTheme());
+  }
+}
+
+applyTheme();
+if (typeof window !== "undefined" && window.matchMedia) {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (store.settings.theme === "auto") {
+      applyTheme();
+      notify();
+    }
+  });
+}
+
 export function updateSettings(patch) {
   store.settings = { ...store.settings, ...patch };
+  applyTheme();
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(store.settings));
   } catch (_) {

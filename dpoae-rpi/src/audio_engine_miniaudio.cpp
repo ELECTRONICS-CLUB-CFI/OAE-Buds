@@ -4,6 +4,7 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <algorithm>
 
 #if __has_include("miniaudio.h")
 #define MINIAUDIO_IMPLEMENTATION
@@ -38,9 +39,9 @@ public:
     }
 
     void stop() override {
-        stop_requested_ = true;
-        streaming_keep_running_ = false;
-        close();
+        // Async-signal-safe: wake polling loops; main thread stops and uninits device.
+        stop_requested_.store(true);
+        streaming_keep_running_.store(false);
     }
 
     void close() override {
@@ -135,44 +136,7 @@ public:
         device_started_ = true;
         ma_device_start(&device_);
 
-        while (streaming_keep_running_ && !stop_requested_) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-
-        ma_device_stop(&device_);
-        ma_device_uninit(&device_);
-        device_started_ = false;
-    }
-
-        tx_loop_ptr_ = tx_stereo_loop.data();
-        tx_loop_frames_ = tx_stereo_loop.size() / channels_tx_;
-        tx_loop_idx_ = 0;
-        on_rx_chunk_ = on_rx_chunk;
-        streaming_mode_ = true;
-        streaming_keep_running_ = true;
-
-        ma_device_config config = ma_device_config_init(ma_device_type_duplex);
-        config.sampleRate = sample_rate_;
-        config.playback.format = ma_format_s16;
-        config.playback.channels = channels_tx_;
-        config.capture.format = ma_format_s16;
-        config.capture.channels = channels_rx_;
-        config.dataCallback = data_callback;
-        config.pUserData = this;
-
-        config.alsa.noAutoFormat = MA_TRUE;
-        config.alsa.noAutoChannels = MA_TRUE;
-        config.alsa.noAutoResample = MA_TRUE;
-
-        if (ma_device_init(&context_, &config, &device_) != MA_SUCCESS) {
-            std::cerr << "[ERROR] Failed to initialize streaming audio device.\n";
-            return;
-        }
-
-        device_started_ = true;
-        ma_device_start(&device_);
-
-        while (streaming_keep_running_) {
+        while (streaming_keep_running_.load() && !stop_requested_.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 
@@ -246,13 +210,14 @@ private:
 
     // Fixed run state
     const int16_t* tx_ptr_ = nullptr;
-    size_t tx_frames_remaining_ = 0;
+    std::atomic<size_t> tx_frames_remaining_{0};
     int16_t* rx_ptr_ = nullptr;
-    size_t rx_frames_remaining_ = 0;
+    std::atomic<size_t> rx_frames_remaining_{0};
 
     // Streaming state
     bool streaming_mode_ = false;
-    bool streaming_keep_running_ = false;
+    std::atomic<bool> streaming_keep_running_{false};
+    std::atomic<bool> stop_requested_{false};
     const int16_t* tx_loop_ptr_ = nullptr;
     size_t tx_loop_frames_ = 0;
     size_t tx_loop_idx_ = 0;

@@ -252,13 +252,13 @@ If an error or abort occurs:
   - Add `--json-stream` CLI flag to [src/main.cpp](file:///home/jashu/OAEBUDS/OAE-Buds/dpoae-rpi/src/main.cpp) and [src/session_runner.cpp](file:///home/jashu/OAEBUDS/OAE-Buds/dpoae-rpi/src/session_runner.cpp).
   - Emit JSON lines with `std::flush` for all phases and results.
   - Implement clean `SIGTERM`/`SIGINT` stream shutdown.
-- [ ] **Stage 2: Backend Services (`gui/app/`)**:
+- [x] **Stage 2: Backend Services (`gui/app/`)**:
   - Create `gui/requirements.txt` (`fastapi`, `uvicorn`, `pydantic`).
   - Implement `hardware.py` (ALSA card detection & non-sudo `amixer` gain locking).
   - Implement `session_manager.py` (`asyncio.Lock` concurrency, `create_subprocess_exec`, NDJSON parser, active state tracking).
   - Implement `records_manager.py` (safe file reading, bilateral session grouping, metadata extraction).
   - Implement `main.py` (FastAPI app, REST routes, SSE endpoint, static file serving).
-- [ ] **Stage 3: Offline Frontend Client (`gui/static/`)**:
+- [x] **Stage 3: Offline Frontend Client (`gui/static/`)**:
   - Vendor `gui/static/vendor/chart.umd.min.js`.
   - Write `gui/static/css/app.css` (modern, responsive, pure CSS with `@media print` rules).
   - Implement `store.js` (central state store + `/api/status` hydration).
@@ -267,7 +267,7 @@ If an error or abort occurs:
   - Implement `dpgram_chart.js` (Chart.js DP-Gram with frequency-relative SNR shading).
   - Implement `records.js` (history table, search filter, detail modal, JSON download).
   - Implement `settings.js` (profile selector, mock toggle, audio verification).
-- [ ] **Stage 4: End-to-End Verification**:
+- [x] **Stage 4: End-to-End Verification**:
   - Test server startup via `./gui/run_gui.sh`.
   - Test complete Mock Mode screening via Web UI (Left Ear, Right Ear, and Guided Bilateral).
   - Verify tablet sleep/reload recovery (reconnects and resumes UI state seamlessly).

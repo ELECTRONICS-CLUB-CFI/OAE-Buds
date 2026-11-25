@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>OAE Buds — DPOAE Hearing Screening</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <script src="/static/vendor/chart.umd.min.js" defer></script>
+  <script type="module" src="/static/js/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Clinical Header -->
+    <header class="top-header no-print">
+      <div class="brand-group">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 8.5a6.5 6.5 0 1 1 13 0c0 6-6 6-6 10a3.5 3.5 0 1 1-7 0" />
+            <path d="M15 8.5a2.5 2.5 0 0 0-5 0v1a2 2 0 1 1 0 4" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">OAE Buds</h1>
+          <p class="brand-subtitle">DPOAE Hearing Screening System</p>
+        </div>
+      </div>
+
+      <div class="status-badges">
+        <span id="badge-audio" class="badge badge-neutral" title="UGREEN USB Audio Status">
+          <span class="dot"></span>
+          <span id="badge-audio-text">Checking Audio...</span>
+        </span>
+        <span id="badge-mode" class="badge badge-neutral">Live Mode</span>
+        <span id="badge-sse" class="badge badge-neutral" title="Telemetry Connection">
+          <span class="dot"></span>
+          <span id="badge-sse-text">Connecting...</span>
+        </span>
+      </div>
+    </header>
+
+    <!-- Primary Touch Navigation Tabs -->
+    <nav class="tab-nav no-print" role="tablist" aria-label="Main Navigation">
+      <button type="button" class="tab-btn active" data-tab="screening" role="tab" aria-selected="true">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9" />
+          <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none" />
+        </svg>
+        <span>New Screening</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="records" role="tab" aria-selected="false">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+          <rect x="9" y="3" width="6" height="4" rx="1" />
+          <path d="M9 12h6M9 16h4" />
+        </svg>
+        <span>Past Records</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="settings" role="tab" aria-selected="false">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+        <span>Settings &amp; Diag</span>
+      </button>
+    </nav>
+
+    <!-- Main Tab Panels -->
+    <main class="main-content">
+      <!-- TAB 1: SCREENING -->
+      <section id="panel-screening" class="tab-panel active">
+        <!-- State A: Patient Setup Form -->
+        <div id="view-setup" class="card">
+          <div class="card-header">
+            <h2>Patient &amp; Screening Setup</h2>
+            <p class="muted">Enter subject details and select the ear protocol to begin screening.</p>
+          </div>
+
+          <form id="setup-form" class="form-grid">
+            <div class="form-group">
+              <label for="input-patient-id">Patient / Subject ID</label>
+              <input id="input-patient-id" type="text" placeholder="e.g., subject_101" required maxlength="128" />
+            </div>
+
+            <div class="form-group">
+              <label for="input-notes">Clinical Notes (Optional)</label>
+              <input id="input-notes" type="text" placeholder="e.g., Routine newborn check, calm" maxlength="512" />
+            </div>
+
+            <div class="form-group full-width">
+              <label>Ear Screening Protocol</label>
+              <div class="segmented-control" id="workflow-selector">
+                <button type="button" class="seg-btn active" data-workflow="bilateral" data-ear="left">
+                  <strong>Guided Bilateral</strong>
+                  <small>Left Ear &rarr; Right Ear</small>
+                </button>
+                <button type="button" class="seg-btn" data-workflow="single" data-ear="left">
+                  <strong>Left Ear Only</strong>
+                  <small>Single Ear Run</small>
+                </button>
+                <button type="button" class="seg-btn" data-workflow="single" data-ear="right">
+                  <strong>Right Ear Only</strong>
+                  <small>Single Ear Run</small>
+                </button>
+              </div>
+            </div>
+
+            <div class="form-group full-width inline-options">
+              <label class="toggle-switch">
+                <input type="checkbox" id="setup-mock-toggle" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Mock / Demo Simulation Mode (No USB hardware required)</span>
+              </label>
+            </div>
+
+            <div id="setup-hw-warning" class="alert alert-warning full-width hidden">
+              UGREEN 80864 USB Audio Adapter is not detected. Plug in the USB probe or enable <strong>Mock / Demo Mode</strong> above to test offline.
+            </div>
+
+            <div id="setup-error" class="alert alert-danger full-width hidden"></div>
+
+            <div class="form-actions full-width">
+              <button type="submit" id="btn-start-test" class="btn btn-primary btn-lg">
+                Start Screening Test
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- State B: Simple Progress View -->
+        <div id="view-running" class="card hidden">
+          <div class="running-header">
+            <div>
+              <span id="run-ear-pill" class="pill pill-info">LEFT EAR</span>
+              <span id="run-workflow-pill" class="pill pill-neutral">Bilateral 1/2</span>
+              <h2 id="run-patient-title" class="run-title">Patient: —</h2>
+            </div>
+            <div class="elapsed-box">
+              <span class="elapsed-label">Elapsed</span>
+              <strong id="run-elapsed" class="elapsed-value">00:00</strong>
+            </div>
+          </div>
+
+          <div class="phase-banner">
+            <div id="run-phase-title" class="phase-title">Initializing Screening...</div>
+            <div id="run-phase-subtitle" class="phase-subtitle">Preparing audio interface</div>
+          </div>
+
+          <div class="progress-wrapper">
+            <div class="progress-track">
+              <div id="run-progress-bar" class="progress-fill" style="width: 0%;"></div>
+            </div>
+            <div class="progress-meta">
+              <span id="run-progress-pct">0%</span>
+              <span id="run-artifact-badge" class="badge badge-success">Clear — Measuring</span>
+            </div>
+          </div>
+
+          <div id="run-freq-pills" class="freq-pills-grid"></div>
+
+          <div class="running-actions">
+            <button type="button" id="btn-stop-test" class="btn btn-danger btn-lg">
+              Stop / Abort Test
+            </button>
+          </div>
+        </div>
+
+        <!-- State C: Guided Bilateral Pause -->
+        <div id="view-bilateral-wait" class="card hidden">
+          <div class="bilateral-prompt">
+            <div class="step-badge">Step 1 of 2 Complete</div>
+            <h2>Left Ear Screening Finished</h2>
+            <p class="lead">Move the probe cleanly to the patient's <strong>RIGHT EAR</strong>, verify fit, and tap Continue below.</p>
+            <div id="bilateral-left-summary" class="mini-verdict-box"></div>
+            <div class="bilateral-actions">
+              <button type="button" id="btn-continue-right" class="btn btn-primary btn-lg">
+                Continue: Test Right Ear
+              </button>
+              <button type="button" id="btn-cancel-bilateral" class="btn btn-outline">
+                Finish with Left Ear Only
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- State D: Clinical Results / Aborted / Error View -->
+        <div id="view-results" class="hidden">
+          <div id="results-alert-card" class="card hidden">
+            <h2 id="results-alert-title">Screening Stopped</h2>
+            <p id="results-alert-msg" class="muted"></p>
+            <div class="form-actions">
+              <button type="button" id="btn-reset-from-alert" class="btn btn-primary">Return to Setup</button>
+            </div>
+          </div>
+
+          <div id="results-report-card" class="report-container hidden">
+            <!-- Print-only formal clinical header -->
+            <div class="print-header print-only">
+              <h1>OAE Buds — DPOAE Hearing Screening Report</h1>
+              <div id="print-meta" class="print-meta"></div>
+            </div>
+
+            <div class="results-toolbar no-print">
+              <div class="results-patient-meta">
+                <h2 id="res-patient-heading">Results</h2>
+                <p id="res-meta-sub" class="muted"></p>
+              </div>
+              <div class="toolbar-buttons">
+                <button type="button" id="btn-print-report" class="btn btn-outline">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                    <rect x="6" y="14" width="12" height="8" />
+                  </svg>
+                  Print / Save PDF
+                </button>
+                <button type="button" id="btn-download-json" class="btn btn-outline">Download JSON</button>
+                <button type="button" id="btn-test-other-ear" class="btn btn-secondary hidden">Test Other Ear</button>
+                <button type="button" id="btn-new-screening" class="btn btn-primary">New Screening</button>
+              </div>
+            </div>
+
+            <div id="results-ears-container" class="ears-results-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: PAST RECORDS -->
+      <section id="panel-records" class="tab-panel hidden no-print">
+        <div class="card">
+          <div class="card-header records-header">
+            <div>
+              <h2>Past Screening Records</h2>
+              <p class="muted">Browse completed single-ear and paired bilateral DPOAE sessions.</p>
+            </div>
+            <button type="button" id="btn-refresh-records" class="btn btn-outline">Refresh</button>
+          </div>
+
+          <div class="filters-bar">
+            <input id="records-search" type="search" placeholder="Search by Patient ID, Session ID, or Notes..." />
+            <select id="records-verdict-filter" aria-label="Filter by Verdict">
+              <option value="">All Verdicts</option>
+              <option value="Pass">Pass Only</option>
+              <option value="Refer">Refer Only</option>
+            </select>
+            <select id="records-ear-filter" aria-label="Filter by Ear">
+              <option value="">All Ears</option>
+              <option value="bilateral">Bilateral</option>
+              <option value="left">Left Ear</option>
+              <option value="right">Right Ear</option>
+            </select>
+          </div>
+
+          <div id="records-list" class="records-table-wrapper">
+            <p class="muted">Loading records...</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: SETTINGS & DIAGNOSTICS -->
+      <section id="panel-settings" class="tab-panel hidden no-print">
+        <div class="settings-grid">
+          <div class="card">
+            <div class="card-header">
+              <h2>Screening Configuration</h2>
+              <p class="muted">Default parameters sent to the native C++ DPOAE engine.</p>
+            </div>
+
+            <div class="form-stack">
+              <div class="form-group">
+                <label for="setting-profile">Hardware Profile</label>
+                <select id="setting-profile"></select>
+              </div>
+
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-mock" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Mock / Simulation Mode (Synthetic passing OAE)</span>
+              </label>
+
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-fit-check" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Enable 226 Hz Probe Seal Check (--fit-check)</span>
+              </label>
+
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-vol-calib" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Enable In-Ear Volume Calibration (--vol-calib)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Audio Hardware &amp; ALSA Mixer Diagnostics</h2>
+              <p class="muted">ALSA gain locks are verified automatically before every live test.</p>
+            </div>
+
+            <div id="hw-status-box" class="hw-box">
+              <p class="muted">Checking audio hardware...</p>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" id="btn-verify-hw" class="btn btn-outline">
+                Verify &amp; Lock ALSA Mixer
+              </button>
+            </div>
+            <div id="hw-verify-output" class="verify-output hidden"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Record Detail Modal -->
+  <div id="record-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-dialog">
+      <div class="modal-header no-print">
+        <h3 id="modal-title">Session Record</h3>
+        <div class="modal-actions">
+          <button type="button" id="modal-print-btn" class="btn btn-outline">Print / Save PDF</button>
+          <button type="button" id="modal-download-btn" class="btn btn-outline">Download JSON</button>
+          <button type="button" id="modal-close-btn" class="btn btn-outline">&times; Close</button>
+        </div>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+</body>
+</html>

@@ -25,6 +25,7 @@ def test_root_serves_index_html_and_all_static_assets(tmp_path: Path) -> None:
         root_resp = client.get("/")
         assert root_resp.status_code == 200
         assert "text/html" in root_resp.headers.get("content-type", "")
+        assert root_resp.headers.get("cache-control") == "no-cache"
         html = root_resp.text
         assert "OAE Buds" in html
 
@@ -37,6 +38,7 @@ def test_root_serves_index_html_and_all_static_assets(tmp_path: Path) -> None:
         for ref in refs:
             r = client.get(ref)
             assert r.status_code == 200, f"Failed to fetch {ref}"
+            assert r.headers.get("cache-control") == "no-cache"
             assert len(r.content) > 0
 
         # Every ES6 module file under static/js/ must also be served

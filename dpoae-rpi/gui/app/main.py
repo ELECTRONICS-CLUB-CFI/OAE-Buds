@@ -27,6 +27,15 @@ from .session_manager import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+class _NoCacheStaticFiles(StaticFiles):
+    """Serve static assets with Cache-Control: no-cache so updated ES modules revalidate."""
+
+    async def get_response(self, path: str, scope: Any) -> Any:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 class StartTestRequest(BaseModel):
     session_id: str | None = None
     patient_id: str = Field(default="0", max_length=128)
@@ -88,13 +97,13 @@ def create_app(
     app.state.records_manager = records_mgr
 
     if resolved_static.is_dir():
-        app.mount("/static", StaticFiles(directory=str(resolved_static)), name="static")
+        app.mount("/static", _NoCacheStaticFiles(directory=str(resolved_static)), name="static")
 
     @app.get("/")
     async def index() -> Any:
         index_html = resolved_static / "index.html"
         if index_html.is_file():
-            return FileResponse(index_html)
+            return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
         return JSONResponse({
             "service": "OAE Buds API",
             "status": "running",

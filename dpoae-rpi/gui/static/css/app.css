@@ -644,6 +644,36 @@ table.data-table {
   gap: 0.45rem;
   margin-bottom: 0.85rem;
 }
+.dev-chart-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+.fft-legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+}
+.fft-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.28rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  background: var(--surface-alt);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.fft-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
 .wav-player-row {
   display: flex;
   flex-wrap: wrap;

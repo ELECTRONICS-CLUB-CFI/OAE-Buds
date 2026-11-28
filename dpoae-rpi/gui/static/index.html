@@ -376,9 +376,18 @@
           <div id="dev-pair-tabs" class="pair-tabs"></div>
           <div id="dev-pair-metrics" class="dev-metrics-row"></div>
 
+          <div class="dev-chart-toolbar">
+            <span class="muted" style="margin:0;">Frequency View:</span>
+            <div id="dev-chart-mode-tabs" class="pair-tabs" style="margin-bottom:0;">
+              <button type="button" class="btn btn-sm btn-primary dev-mode-btn" data-mode="bars">Bar Chart (Key Tones)</button>
+              <button type="button" class="btn btn-sm btn-outline dev-mode-btn" data-mode="spectrum">Spectrum (500–6k Hz)</button>
+            </div>
+          </div>
+
           <div class="dev-grid">
             <div>
-              <div class="chart-box"><canvas id="dev-fft-canvas"></canvas></div>
+              <div class="chart-box" style="margin-bottom:0.6rem;"><canvas id="dev-fft-canvas"></canvas></div>
+              <div id="dev-fft-legend" class="fft-legend-row"></div>
             </div>
             <div>
               <div class="chart-box"><canvas id="dev-wave-canvas"></canvas></div>

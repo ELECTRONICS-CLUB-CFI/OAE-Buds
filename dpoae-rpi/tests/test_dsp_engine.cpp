@@ -142,6 +142,33 @@ TEST(DspEngineTest, AudioHealthAndWaveformEnvelopeAndDecimatedSpectrum) {
     EXPECT_NEAR(dec.freqs_hz[best_idx], 1500.0, 25.0);
 }
 
+TEST(DspEngineTest, AllRejectedStillExportsSpectrumAndFails) {
+    oae::OaeConfig cfg;
+    cfg.audio.sample_rate = 48000;
+    cfg.artifact.enabled = true;
+    cfg.artifact.amp_threshold = 500;
+
+    oae::FrequencyPair pair;
+    pair.f2 = 2016;
+    pair.f1 = 1640;
+    pair.oae_bin = 1264;
+    pair.imd_bin = 2392;
+
+    uint32_t total_samples = 3 * 48000;
+    std::vector<int16_t> recording(total_samples);
+    for (uint32_t i = 0; i < total_samples; ++i) {
+        double t = static_cast<double>(i) / 48000.0;
+        recording[i] = static_cast<int16_t>(2000.0 * std::sin(2.0 * M_PI * 1640.0 * t));
+    }
+
+    std::vector<double> spec_power;
+    auto res = oae::dsp::process_frequency_pair(recording, pair, cfg, &spec_power);
+    EXPECT_FALSE(res.pass);
+    EXPECT_EQ(res.segments_used, 0u);
+    EXPECT_GT(res.segments_rejected, 0u);
+    EXPECT_FALSE(spec_power.empty());
+}
+
 #ifndef GTEST_INCLUDE_GTEST_GTEST_H_
 int main() {
     return RUN_ALL_TESTS();

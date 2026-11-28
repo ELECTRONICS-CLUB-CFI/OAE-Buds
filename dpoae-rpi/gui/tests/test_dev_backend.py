@@ -95,6 +95,10 @@ def test_dev_telemetry_overrides_runs_spectrum_and_wav_endpoints(tmp_path: Path)
         assert len(spec_json["pairs"]) == 4
         assert len(spec_json["pairs"][0]["spectrum"]["freqs_hz"]) == 512
         assert len(spec_json["pairs"][0]["waveform"]["min"]) == 500
+        assert "f1_db" in spec_json["pairs"][0]
+        assert "f2_db" in spec_json["pairs"][0]
+        assert "imd_db" in spec_json["pairs"][0]
+        assert "segments_used" in spec_json["pairs"][0]
 
         wav_resp = client.get(f"/api/dev/wav/{wav_name}")
         assert wav_resp.status_code == 200

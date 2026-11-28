@@ -276,9 +276,19 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
         dsp::AudioHealthMetrics health;
         dsp::DecimatedSpectrum spectrum;
         dsp::WaveformEnvelope waveform;
+        double f1_db = 0.0;
+        double f2_db = 0.0;
+        double imd_db = 0.0;
         std::string wav_file;
     };
     std::vector<DevPairTelemetry> dev_pairs;
+
+    auto bin_power_db = [](const std::vector<double>& pwr, uint32_t bin) -> double {
+        if (bin < pwr.size()) {
+            return 10.0 * std::log10(std::max(pwr[bin], 1e-12));
+        }
+        return 0.0;
+    };
 
     for (size_t i = 0; i < active_pairs.size(); ++i) {
         if (stop_flag && stop_flag->load()) {
@@ -345,6 +355,9 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
             dev_item.health = dsp::compute_audio_health(rx_mono);
             dev_item.spectrum = dsp::decimate_spectrum_db(spec_power, fs, 500.0, 6000.0, 512);
             dev_item.waveform = dsp::compute_waveform_envelope(rx_mono, 500);
+            dev_item.f1_db = bin_power_db(spec_power, pair.f1);
+            dev_item.f2_db = bin_power_db(spec_power, pair.f2);
+            dev_item.imd_db = bin_power_db(spec_power, pair.imd_bin);
             dev_item.wav_file = saved_wav_path;
 
             if (json_stream) {
@@ -418,6 +431,11 @@ SessionSummary SessionRunner::run_session(const std::string& patient_id,
                 dev_out << "      \"signal_db\": " << std::fixed << std::setprecision(1) << dp.result.signal_db << ",\n";
                 dev_out << "      \"noise_db\": " << std::fixed << std::setprecision(1) << dp.result.noise_db << ",\n";
                 dev_out << "      \"snr_db\": " << std::fixed << std::setprecision(1) << dp.result.snr_db << ",\n";
+                dev_out << "      \"f1_db\": " << std::fixed << std::setprecision(1) << dp.f1_db << ",\n";
+                dev_out << "      \"f2_db\": " << std::fixed << std::setprecision(1) << dp.f2_db << ",\n";
+                dev_out << "      \"imd_db\": " << std::fixed << std::setprecision(1) << dp.imd_db << ",\n";
+                dev_out << "      \"segments_used\": " << dp.result.segments_used << ",\n";
+                dev_out << "      \"segments_rejected\": " << dp.result.segments_rejected << ",\n";
                 dev_out << "      \"peak_dbfs\": " << std::fixed << std::setprecision(1) << dp.health.peak_dbfs << ",\n";
                 dev_out << "      \"rms_dbfs\": " << std::fixed << std::setprecision(1) << dp.health.rms_dbfs << ",\n";
                 dev_out << "      \"clipped_samples\": " << dp.health.clipped_samples << ",\n";

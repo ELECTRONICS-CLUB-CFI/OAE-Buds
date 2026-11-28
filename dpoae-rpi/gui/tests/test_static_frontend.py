@@ -88,6 +88,8 @@ def test_dev_tab_hidden_by_default_and_assets_present() -> None:
     assert 'id="dev-use-overrides"' in html
     assert 'id="dev-fft-canvas"' in html
     assert 'id="dev-wave-canvas"' in html
+    assert 'id="dev-fft-legend"' in html
+    assert 'id="dev-chart-mode-tabs"' in html
     assert 'id="dev-tone-form"' in html
     assert 'id="dev-console-log"' in html
 

@@ -400,12 +400,12 @@ DpoaeResult process_frequency_pair(std::span<const int16_t> raw_recording,
         }
     }
 
-    if (segcounter == 0) {
-        // Fallback if all were rejected: use last available raw block
+    bool all_rejected = (segcounter == 0);
+    if (all_rejected && spec_power.empty()) {
         return result;
     }
 
-    // Final evaluation on the coherently averaged spectrum
+    // Final evaluation on the coherently averaged spectrum (or last raw block if all were rejected)
     SnrResult calc_oae = calc_snr(spec_power, seglen, pair.oae_bin);
     SnrResult calc_imd = calc_snr(spec_power, seglen, pair.imd_bin);
 
@@ -437,7 +437,7 @@ DpoaeResult process_frequency_pair(std::span<const int16_t> raw_recording,
     result.snr_db = final_snr;
     result.segments_used = segcounter;
     result.segments_rejected = rejected_count;
-    result.pass = (final_snr >= config.test.snr_threshold_db);
+    result.pass = (!all_rejected && final_snr >= config.test.snr_threshold_db);
 
     if (out_spec_power != nullptr) {
         *out_spec_power = spec_power;

@@ -37,6 +37,7 @@ function destroyDevCanvasChart(canvasId) {
   if (el && el._oaeChart) {
     el._oaeChart.destroy();
     el._oaeChart = null;
+    el._oaeChartMode = null;
   }
 }
 
@@ -56,17 +57,12 @@ const markerOverlayPlugin = {
       const yPos = yScale.getPixelForValue(noiseDb);
       if (yPos >= yScale.top && yPos <= yScale.bottom) {
         ctx.beginPath();
-        ctx.setLineDash([4, 4]);
+        ctx.setLineDash([5, 4]);
         ctx.strokeStyle = pluginOptions.noiseLineColor || "#64748b";
         ctx.lineWidth = 1.5;
         ctx.moveTo(xScale.left, yPos);
         ctx.lineTo(xScale.right, yPos);
         ctx.stroke();
-
-        ctx.fillStyle = pluginOptions.noiseLineColor || "#64748b";
-        ctx.font = "600 11px sans-serif";
-        ctx.textAlign = "right";
-        ctx.fillText(`Noise Floor (${noiseDb.toFixed(1)} dB)`, xScale.right - 6, yPos - 4);
       }
     }
 
@@ -74,18 +70,35 @@ const markerOverlayPlugin = {
       if (!m || typeof m.hz !== "number" || m.hz < xScale.min || m.hz > xScale.max) continue;
       const xPos = xScale.getPixelForValue(m.hz);
       ctx.beginPath();
-      ctx.setLineDash([3, 3]);
+      ctx.setLineDash([4, 3]);
       ctx.strokeStyle = m.color;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 2;
       ctx.moveTo(xPos, yScale.top);
       ctx.lineTo(xPos, yScale.bottom);
       ctx.stroke();
-
-      ctx.fillStyle = m.color;
-      ctx.font = "700 11px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(m.label, xPos, yScale.top + (m.yOffset || 12));
     }
+    ctx.restore();
+  },
+};
+
+const barValueLabelPlugin = {
+  id: "oaeBarLabels",
+  afterDatasetsDraw(chart, _args, pluginOptions) {
+    const meta = chart.getDatasetMeta(0);
+    if (!meta || !meta.data) return;
+    const values = chart.data.datasets?.[0]?.data || [];
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.fillStyle = pluginOptions?.textColor || "#cbd5e1";
+    ctx.font = "700 11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    meta.data.forEach((bar, i) => {
+      const val = Number(values[i]);
+      if (!Number.isFinite(val)) return;
+      const yPos = Math.max(chart.chartArea.top + 14, bar.y - 4);
+      ctx.fillText(`${val.toFixed(1)} dB`, bar.x, yPos);
+    });
     ctx.restore();
   },
 };
@@ -158,9 +171,148 @@ export async function loadDevSpectrum(filename) {
 let lastRunsSelectKey = "";
 let lastPairMetaKey = "";
 let lastSpectrumRenderKey = "";
+let devChartMode = "bars"; // "bars" | "spectrum"
+
+function lookupToneDb(pair, explicitVal, targetHz) {
+  if (explicitVal !== undefined && explicitVal !== null && Number.isFinite(Number(explicitVal))) {
+    return Number(explicitVal);
+  }
+  const freqs = pair?.spectrum?.freqs_hz || [];
+  const mags = pair?.spectrum?.magnitudes_db || [];
+  if (!freqs.length || freqs.length !== mags.length) return 0.0;
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < freqs.length; i += 1) {
+    const d = Math.abs(Number(freqs[i]) - Number(targetHz));
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+  return Number(mags[bestIdx] || 0);
+}
+
+function buildKeyToneEntries(pair, isDark) {
+  return [
+    {
+      key: "oae",
+      label: `2f1-f2`,
+      hz: Number(pair.oae_bin),
+      fullLabel: `2f1-f2 (${pair.oae_bin} Hz)`,
+      db: Number(pair.signal_db || 0),
+      color: isDark ? "#4ade80" : "#15803d",
+    },
+    {
+      key: "f1",
+      label: `f1`,
+      hz: Number(pair.f1),
+      fullLabel: `f1 (${pair.f1} Hz)`,
+      db: lookupToneDb(pair, pair.f1_db, pair.f1),
+      color: isDark ? "#fbbf24" : "#b45309",
+    },
+    {
+      key: "f2",
+      label: `f2`,
+      hz: Number(pair.f2),
+      fullLabel: `f2 (${pair.f2} Hz)`,
+      db: lookupToneDb(pair, pair.f2_db, pair.f2),
+      color: isDark ? "#38bdf8" : "#0369a1",
+    },
+    {
+      key: "imd",
+      label: `IMD`,
+      hz: Number(pair.imd_bin),
+      fullLabel: `IMD (${pair.imd_bin} Hz)`,
+      db: lookupToneDb(pair, pair.imd_db, pair.imd_bin),
+      color: isDark ? "#f87171" : "#b91c1c",
+    },
+    {
+      key: "noise",
+      label: `Noise Floor`,
+      hz: null,
+      fullLabel: `Noise Floor`,
+      db: Number(pair.noise_db || 0),
+      color: isDark ? "#94a3b8" : "#64748b",
+    },
+  ];
+}
+
+function updateOrCreateBarChart(canvas, entries, colors) {
+  if (!canvas || typeof window.Chart === "undefined") return;
+  const labels = entries.map((e) => (e.hz ? `${e.label} (${e.hz} Hz)` : e.label));
+  const vals = entries.map((e) => e.db);
+  const bgColors = entries.map((e) => e.color);
+
+  if (canvas._oaeChart && canvas._oaeChartMode !== "bars") {
+    destroyDevCanvasChart("dev-fft-canvas");
+  }
+
+  const existing = canvas._oaeChart;
+  if (existing) {
+    existing.data.labels = labels;
+    existing.data.datasets[0].data = vals;
+    existing.data.datasets[0].backgroundColor = bgColors;
+    existing.data.datasets[0].borderColor = bgColors;
+    existing.options.plugins.oaeBarLabels = { textColor: colors.tickColor };
+    existing.options.scales.x.ticks.color = colors.tickColor;
+    existing.options.scales.x.grid.color = colors.gridColor;
+    existing.options.scales.y.title.color = colors.tickColor;
+    existing.options.scales.y.ticks.color = colors.tickColor;
+    existing.options.scales.y.grid.color = colors.gridColor;
+    existing.update("none");
+    return;
+  }
+
+  canvas._oaeChartMode = "bars";
+  canvas._oaeChart = new window.Chart(canvas.getContext("2d"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Amplitude (dB)",
+          data: vals,
+          backgroundColor: bgColors,
+          borderColor: bgColors,
+          borderWidth: 1,
+          borderRadius: 6,
+          maxBarThickness: 56,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      devicePixelRatio: getClippedDpr(),
+      layout: { padding: { top: 20 } },
+      plugins: {
+        legend: { display: false },
+        oaeBarLabels: { textColor: colors.tickColor },
+      },
+      scales: {
+        x: {
+          ticks: { color: colors.tickColor, font: { weight: "600" } },
+          grid: { display: false },
+        },
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: "Magnitude (dB)", color: colors.tickColor },
+          ticks: { color: colors.tickColor },
+          grid: { color: colors.gridColor },
+        },
+      },
+    },
+    plugins: [barValueLabelPlugin],
+  });
+}
 
 function updateOrCreateFftChart(canvas, pts, markers, pair, colors) {
   if (!canvas || typeof window.Chart === "undefined") return;
+  if (canvas._oaeChart && canvas._oaeChartMode !== "spectrum") {
+    destroyDevCanvasChart("dev-fft-canvas");
+  }
+
   const existing = canvas._oaeChart;
   if (existing) {
     existing.data.datasets[0].data = pts;
@@ -180,6 +332,7 @@ function updateOrCreateFftChart(canvas, pts, markers, pair, colors) {
     return;
   }
 
+  canvas._oaeChartMode = "spectrum";
   canvas._oaeChart = new window.Chart(canvas.getContext("2d"), {
     type: "line",
     data: {
@@ -329,10 +482,12 @@ function renderSpectrumAndWaveform() {
   const wavLink = document.getElementById("dev-pair-wav-dl");
 
   const pairs = data?.pairs || [];
+  const legendEl = document.getElementById("dev-fft-legend");
   if (!pairs.length) {
     if (lastPairMetaKey !== "empty") {
       lastPairMetaKey = "empty";
       if (pairTabs) pairTabs.innerHTML = "";
+      if (legendEl) legendEl.innerHTML = "";
       if (metricsEl) {
         metricsEl.innerHTML =
           '<p class="muted">Run a screening while Developer Mode is active to inspect FFT spectra, waveform envelopes, and clipping metrics.</p>';
@@ -348,7 +503,7 @@ function renderSpectrumAndWaveform() {
 
   const idx = Math.min(Math.max(0, store.dev.selectedPairIndex || 0), pairs.length - 1);
   const pair = pairs[idx];
-  const pairMetaKey = `${store.dev.selectedRunFilename}:${idx}:${pairs.length}:${pair.wav_file || ""}`;
+  const pairMetaKey = `${store.dev.selectedRunFilename}:${idx}:${pairs.length}:${pair.wav_file || ""}:${pair.segments_used}`;
   if (pairMetaKey !== lastPairMetaKey) {
     lastPairMetaKey = pairMetaKey;
     if (pairTabs) {
@@ -367,11 +522,16 @@ function renderSpectrumAndWaveform() {
         Number(pair.clipped_samples || 0) > 0
           ? `<span class="badge badge-danger">${pair.clipped_samples} Clipped</span>`
           : `<span class="badge badge-success">0 Clipped</span>`;
+      const rejectBadge =
+        pair.segments_used === 0
+          ? `<span class="badge badge-warning">All segments rejected (&gt; Amp Check) — raw block shown</span>`
+          : "";
       metricsEl.innerHTML = `
         <span class="badge badge-info">Peak: ${Number(pair.peak_dbfs).toFixed(1)} dBFS</span>
         <span class="badge badge-neutral">RMS: ${Number(pair.rms_dbfs).toFixed(1)} dBFS</span>
         ${clipBadge}
         <span class="badge badge-neutral">Signal: ${Number(pair.signal_db).toFixed(1)} dB | SNR: ${Number(pair.snr_db).toFixed(1)} dB</span>
+        ${rejectBadge}
       `;
     }
 
@@ -397,7 +557,7 @@ function renderSpectrumAndWaveform() {
   }
 
   const theme = getEffectiveTheme();
-  const renderKey = `${store.dev.selectedRunFilename}:${idx}:${theme}`;
+  const renderKey = `${store.dev.selectedRunFilename}:${idx}:${theme}:${devChartMode}`;
   if (renderKey === lastSpectrumRenderKey) return;
   lastSpectrumRenderKey = renderKey;
 
@@ -410,18 +570,31 @@ function renderSpectrumAndWaveform() {
     noiseLineColor: isDark ? "#94a3b8" : "#64748b",
   };
 
+  const entries = buildKeyToneEntries(pair, isDark);
+  if (legendEl) {
+    legendEl.innerHTML = entries
+      .map(
+        (e) =>
+          `<span class="fft-legend-chip"><span class="fft-dot" style="background:${e.color};"></span><span>${escapeHtml(
+            e.fullLabel
+          )}: <strong>${e.db.toFixed(1)} dB</strong></span></span>`
+      )
+      .join("");
+  }
+
   const fftCanvas = document.getElementById("dev-fft-canvas");
-  if (fftCanvas && pair.spectrum) {
-    const freqs = pair.spectrum.freqs_hz || [];
-    const mags = pair.spectrum.magnitudes_db || [];
-    const pts = freqs.map((hz, i) => ({ x: Number(hz), y: Number(mags[i]) }));
-    const markers = [
-      { hz: Number(pair.oae_bin), label: `2f1-f2 (${pair.oae_bin})`, color: isDark ? "#4ade80" : "#15803d", yOffset: 12 },
-      { hz: Number(pair.f1), label: `f1 (${pair.f1})`, color: isDark ? "#fbbf24" : "#b45309", yOffset: 26 },
-      { hz: Number(pair.f2), label: `f2 (${pair.f2})`, color: isDark ? "#38bdf8" : "#0369a1", yOffset: 12 },
-      { hz: Number(pair.imd_bin), label: `IMD (${pair.imd_bin})`, color: isDark ? "#f87171" : "#b91c1c", yOffset: 26 },
-    ];
-    updateOrCreateFftChart(fftCanvas, pts, markers, pair, colors);
+  if (fftCanvas) {
+    if (devChartMode === "bars") {
+      updateOrCreateBarChart(fftCanvas, entries, colors);
+    } else if (pair.spectrum) {
+      const freqs = pair.spectrum.freqs_hz || [];
+      const mags = pair.spectrum.magnitudes_db || [];
+      const pts = freqs.map((hz, i) => ({ x: Number(hz), y: Number(mags[i]) }));
+      const markers = entries
+        .filter((e) => e.hz !== null)
+        .map((e) => ({ hz: e.hz, color: e.color }));
+      updateOrCreateFftChart(fftCanvas, pts, markers, pair, colors);
+    }
   }
 
   const waveCanvas = document.getElementById("dev-wave-canvas");
@@ -601,6 +774,21 @@ export function initDev() {
     const btn = e.target.closest(".dev-pair-btn");
     if (!btn) return;
     store.dev.selectedPairIndex = Number(btn.dataset.idx);
+    notify("dev_metrics");
+  });
+
+  // Bar Chart vs Continuous Spectrum toggle
+  document.getElementById("dev-chart-mode-tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".dev-mode-btn");
+    if (!btn) return;
+    const mode = btn.dataset.mode === "spectrum" ? "spectrum" : "bars";
+    if (mode === devChartMode) return;
+    devChartMode = mode;
+    document.querySelectorAll("#dev-chart-mode-tabs .dev-mode-btn").forEach((b) => {
+      const active = b.dataset.mode === devChartMode;
+      b.classList.toggle("btn-primary", active);
+      b.classList.toggle("btn-outline", !active);
+    });
     notify("dev_metrics");
   });
 

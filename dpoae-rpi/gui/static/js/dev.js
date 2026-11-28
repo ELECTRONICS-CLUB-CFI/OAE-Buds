@@ -92,12 +92,18 @@ const barValueLabelPlugin = {
     ctx.fillStyle = pluginOptions?.textColor || "#cbd5e1";
     ctx.font = "700 11px sans-serif";
     ctx.textAlign = "center";
-    ctx.textBaseline = "bottom";
     meta.data.forEach((bar, i) => {
       const val = Number(values[i]);
       if (!Number.isFinite(val)) return;
-      const yPos = Math.max(chart.chartArea.top + 14, bar.y - 4);
-      ctx.fillText(`${val.toFixed(1)} dB`, bar.x, yPos);
+      if (val >= 0) {
+        ctx.textBaseline = "bottom";
+        const yPos = Math.max(chart.chartArea.top + 14, bar.y - 4);
+        ctx.fillText(`${val.toFixed(1)} dB`, bar.x, yPos);
+      } else {
+        ctx.textBaseline = "top";
+        const yPos = Math.min(chart.chartArea.bottom - 14, bar.y + 4);
+        ctx.fillText(`${val.toFixed(1)} dB`, bar.x, yPos);
+      }
     });
     ctx.restore();
   },
@@ -192,14 +198,14 @@ function lookupToneDb(pair, explicitVal, targetHz) {
   return Number(mags[bestIdx] || 0);
 }
 
-function buildKeyToneEntries(pair, isDark) {
+function buildKeyToneEntries(pair, isDark, normOffsetDb = 0) {
   return [
     {
       key: "oae",
       label: `2f1-f2`,
       hz: Number(pair.oae_bin),
       fullLabel: `2f1-f2 (${pair.oae_bin} Hz)`,
-      db: Number(pair.signal_db || 0),
+      db: Number(pair.signal_db || 0) - normOffsetDb,
       color: isDark ? "#4ade80" : "#15803d",
     },
     {
@@ -207,7 +213,7 @@ function buildKeyToneEntries(pair, isDark) {
       label: `f1`,
       hz: Number(pair.f1),
       fullLabel: `f1 (${pair.f1} Hz)`,
-      db: lookupToneDb(pair, pair.f1_db, pair.f1),
+      db: lookupToneDb(pair, pair.f1_db, pair.f1) - normOffsetDb,
       color: isDark ? "#fbbf24" : "#b45309",
     },
     {
@@ -215,7 +221,7 @@ function buildKeyToneEntries(pair, isDark) {
       label: `f2`,
       hz: Number(pair.f2),
       fullLabel: `f2 (${pair.f2} Hz)`,
-      db: lookupToneDb(pair, pair.f2_db, pair.f2),
+      db: lookupToneDb(pair, pair.f2_db, pair.f2) - normOffsetDb,
       color: isDark ? "#38bdf8" : "#0369a1",
     },
     {
@@ -223,7 +229,7 @@ function buildKeyToneEntries(pair, isDark) {
       label: `IMD`,
       hz: Number(pair.imd_bin),
       fullLabel: `IMD (${pair.imd_bin} Hz)`,
-      db: lookupToneDb(pair, pair.imd_db, pair.imd_bin),
+      db: lookupToneDb(pair, pair.imd_db, pair.imd_bin) - normOffsetDb,
       color: isDark ? "#f87171" : "#b91c1c",
     },
     {
@@ -231,7 +237,7 @@ function buildKeyToneEntries(pair, isDark) {
       label: `Noise Floor`,
       hz: null,
       fullLabel: `Noise Floor`,
-      db: Number(pair.noise_db || 0),
+      db: Number(pair.noise_db || 0) - normOffsetDb,
       color: isDark ? "#94a3b8" : "#64748b",
     },
   ];
@@ -285,7 +291,7 @@ function updateOrCreateBarChart(canvas, entries, colors) {
       maintainAspectRatio: false,
       animation: false,
       devicePixelRatio: getClippedDpr(),
-      layout: { padding: { top: 20 } },
+      layout: { padding: { top: 22, bottom: 22 } },
       plugins: {
         legend: { display: false },
         oaeBarLabels: { textColor: colors.tickColor },
@@ -296,8 +302,8 @@ function updateOrCreateBarChart(canvas, entries, colors) {
           grid: { display: false },
         },
         y: {
-          beginAtZero: true,
-          title: { display: true, text: "Magnitude (dB)", color: colors.tickColor },
+          beginAtZero: false,
+          title: { display: true, text: "Amplitude (dB, |X|/N)", color: colors.tickColor },
           ticks: { color: colors.tickColor },
           grid: { color: colors.gridColor },
         },
@@ -307,7 +313,7 @@ function updateOrCreateBarChart(canvas, entries, colors) {
   });
 }
 
-function updateOrCreateFftChart(canvas, pts, markers, pair, colors) {
+function updateOrCreateFftChart(canvas, pts, markers, noiseDb, colors) {
   if (!canvas || typeof window.Chart === "undefined") return;
   if (canvas._oaeChart && canvas._oaeChartMode !== "spectrum") {
     destroyDevCanvasChart("dev-fft-canvas");
@@ -319,7 +325,7 @@ function updateOrCreateFftChart(canvas, pts, markers, pair, colors) {
     existing.data.datasets[0].borderColor = colors.fftLineColor;
     existing.options.plugins.oaeDevMarkers = {
       markers,
-      noiseDb: Number(pair.noise_db),
+      noiseDb,
       noiseLineColor: colors.noiseLineColor,
     };
     existing.options.scales.x.title.color = colors.tickColor;
@@ -338,7 +344,7 @@ function updateOrCreateFftChart(canvas, pts, markers, pair, colors) {
     data: {
       datasets: [
         {
-          label: "FFT Magnitude (dB)",
+          label: "Normalized Amplitude (dB)",
           data: pts,
           borderColor: colors.fftLineColor,
           borderWidth: 1.75,
@@ -361,7 +367,7 @@ function updateOrCreateFftChart(canvas, pts, markers, pair, colors) {
         legend: { display: false },
         oaeDevMarkers: {
           markers,
-          noiseDb: Number(pair.noise_db),
+          noiseDb,
           noiseLineColor: colors.noiseLineColor,
         },
       },
@@ -375,7 +381,7 @@ function updateOrCreateFftChart(canvas, pts, markers, pair, colors) {
           grid: { color: colors.gridColor },
         },
         y: {
-          title: { display: true, text: "Magnitude (dB)", color: colors.tickColor },
+          title: { display: true, text: "Amplitude (dB, |X|/N)", color: colors.tickColor },
           ticks: { color: colors.tickColor },
           grid: { color: colors.gridColor },
         },
@@ -503,7 +509,9 @@ function renderSpectrumAndWaveform() {
 
   const idx = Math.min(Math.max(0, store.dev.selectedPairIndex || 0), pairs.length - 1);
   const pair = pairs[idx];
-  const pairMetaKey = `${store.dev.selectedRunFilename}:${idx}:${pairs.length}:${pair.wav_file || ""}:${pair.segments_used}`;
+  const sampleRate = Math.max(1, Number(data?.sample_rate || 48000));
+  const normOffsetDb = 20 * Math.log10(sampleRate);
+  const pairMetaKey = `${store.dev.selectedRunFilename}:${idx}:${pairs.length}:${sampleRate}:${pair.wav_file || ""}:${pair.segments_used}`;
   if (pairMetaKey !== lastPairMetaKey) {
     lastPairMetaKey = pairMetaKey;
     if (pairTabs) {
@@ -526,11 +534,12 @@ function renderSpectrumAndWaveform() {
         pair.segments_used === 0
           ? `<span class="badge badge-warning">All segments rejected (&gt; Amp Check) — raw block shown</span>`
           : "";
+      const normSignalDb = Number(pair.signal_db || 0) - normOffsetDb;
       metricsEl.innerHTML = `
         <span class="badge badge-info">Peak: ${Number(pair.peak_dbfs).toFixed(1)} dBFS</span>
         <span class="badge badge-neutral">RMS: ${Number(pair.rms_dbfs).toFixed(1)} dBFS</span>
         ${clipBadge}
-        <span class="badge badge-neutral">Signal: ${Number(pair.signal_db).toFixed(1)} dB | SNR: ${Number(pair.snr_db).toFixed(1)} dB</span>
+        <span class="badge badge-neutral">Signal: ${normSignalDb.toFixed(1)} dB | SNR: ${Number(pair.snr_db).toFixed(1)} dB</span>
         ${rejectBadge}
       `;
     }
@@ -557,7 +566,7 @@ function renderSpectrumAndWaveform() {
   }
 
   const theme = getEffectiveTheme();
-  const renderKey = `${store.dev.selectedRunFilename}:${idx}:${theme}:${devChartMode}`;
+  const renderKey = `${store.dev.selectedRunFilename}:${idx}:${sampleRate}:${theme}:${devChartMode}`;
   if (renderKey === lastSpectrumRenderKey) return;
   lastSpectrumRenderKey = renderKey;
 
@@ -570,7 +579,7 @@ function renderSpectrumAndWaveform() {
     noiseLineColor: isDark ? "#94a3b8" : "#64748b",
   };
 
-  const entries = buildKeyToneEntries(pair, isDark);
+  const entries = buildKeyToneEntries(pair, isDark, normOffsetDb);
   if (legendEl) {
     legendEl.innerHTML = entries
       .map(
@@ -589,11 +598,11 @@ function renderSpectrumAndWaveform() {
     } else if (pair.spectrum) {
       const freqs = pair.spectrum.freqs_hz || [];
       const mags = pair.spectrum.magnitudes_db || [];
-      const pts = freqs.map((hz, i) => ({ x: Number(hz), y: Number(mags[i]) }));
+      const pts = freqs.map((hz, i) => ({ x: Number(hz), y: Number(mags[i]) - normOffsetDb }));
       const markers = entries
         .filter((e) => e.hz !== null)
         .map((e) => ({ hz: e.hz, color: e.color }));
-      updateOrCreateFftChart(fftCanvas, pts, markers, pair, colors);
+      updateOrCreateFftChart(fftCanvas, pts, markers, Number(pair.noise_db || 0) - normOffsetDb, colors);
     }
   }
 

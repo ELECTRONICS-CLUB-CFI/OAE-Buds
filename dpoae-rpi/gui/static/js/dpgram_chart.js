@@ -140,7 +140,7 @@ export function renderDpGramChart(canvasId, frequencies, snrThresholdDb = 7.0) {
   chartRegistry.set(canvasId, chart);
 }
 
-export function buildEarCardHtml(summary, canvasId, minRequired = 3) {
+export function buildEarCardHtml(summary, canvasId, minRequired = 3, options = {}) {
   if (!summary) return "";
   const earLabel = String(summary.ear || "left").toUpperCase();
   const isPass = summary.verdict === "Pass";
@@ -149,6 +149,11 @@ export function buildEarCardHtml(summary, canvasId, minRequired = 3) {
   const passedCount = summary.passed_count ?? 0;
   const totalFreqs = summary.total_active_frequencies ?? (summary.frequencies ? summary.frequencies.length : 0);
   const freqs = Array.isArray(summary.frequencies) ? summary.frequencies : [];
+  const deleteEarBtnHtml = options.deleteFilename
+    ? `<button type="button" class="btn btn-danger btn-sm btn-delete-ear no-print" data-filename="${escapeHtml(
+        options.deleteFilename
+      )}" data-ear="${escapeHtml(summary.ear || earLabel.toLowerCase())}">Delete ${earLabel} Ear</button>`
+    : "";
 
   const rowsHtml = freqs
     .map((f) => {
@@ -196,8 +201,11 @@ export function buildEarCardHtml(summary, canvasId, minRequired = 3) {
           <span class="pill pill-neutral">${earLabel} EAR</span>
           <h3 class="verdict-title">VERDICT: ${verdictLabel}</h3>
         </div>
-        <div class="verdict-sub">
-          ${passedCount} of ${totalFreqs} Frequencies Passed (Min Required: ${minRequired})
+        <div class="table-actions">
+          <div class="verdict-sub">
+            ${passedCount} of ${totalFreqs} Frequencies Passed (Min Required: ${minRequired})
+          </div>
+          ${deleteEarBtnHtml}
         </div>
       </div>
 

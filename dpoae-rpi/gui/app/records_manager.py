@@ -70,6 +70,101 @@ class RecordsManager:
             return None
         return path
 
+    def _collect_linked_artifacts(self, clinical_path: Path) -> list[Path]:
+        """Collect validated -dev.json and .wav artifact paths belonging to clinical_path."""
+        stem = clinical_path.name[: -len(".json")]
+        candidate_names: set[str] = {f"{stem}-dev.json"}
+
+        # Scan directory for matching <stem>-*.wav files
+        if self.results_dir.exists():
+            try:
+                for entry in os.scandir(self.results_dir):
+                    if (
+                        entry.is_file()
+                        and entry.name.startswith(f"{stem}-")
+                        and entry.name.endswith(".wav")
+                    ):
+                        candidate_names.add(entry.name)
+            except OSError:
+                pass
+
+        # Also inspect references embedded inside clinical JSON and -dev.json
+        for probe_path, suffix in (
+            (clinical_path, ".json"),
+            (self.results_dir / f"{stem}-dev.json", "-dev.json"),
+        ):
+            if not probe_path.is_file():
+                continue
+            try:
+                data = json.loads(probe_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            dev_ref = data.get("dev_telemetry_file")
+            if dev_ref:
+                candidate_names.add(Path(str(dev_ref)).name)
+            for pair in data.get("pairs") or []:
+                if isinstance(pair, dict) and pair.get("wav_file"):
+                    candidate_names.add(Path(str(pair["wav_file"])).name)
+
+        resolved_artifacts: list[Path] = []
+        seen_paths: set[Path] = set()
+        for name in sorted(candidate_names):
+            suffix = "-dev.json" if name.endswith("-dev.json") else ".wav" if name.endswith(".wav") else ""
+            if not suffix:
+                continue
+            try:
+                artifact_path = self._safe_resolve(name, required_suffix=suffix)
+            except InvalidRecordPathError:
+                continue
+            if artifact_path.is_file() and artifact_path not in seen_paths:
+                seen_paths.add(artifact_path)
+                resolved_artifacts.append(artifact_path)
+
+        return resolved_artifacts
+
+    def delete_records(
+        self,
+        filenames: list[str],
+        delete_artifacts: bool = True,
+    ) -> dict[str, Any]:
+        """Delete one or more clinical JSON records and optionally their linked -dev.json/.wav files."""
+        if not filenames:
+            raise InvalidRecordPathError("No record filenames provided.")
+
+        clinical_paths: list[Path] = []
+        for filename in filenames:
+            if filename.endswith("-dev.json"):
+                raise InvalidRecordPathError("Expected clinical record filename, not -dev.json.")
+            path = self._safe_resolve(filename, required_suffix=".json")
+            clinical_paths.append(path)
+
+        deleted_records: list[str] = []
+        deleted_artifacts: list[str] = []
+
+        for clinical_path in clinical_paths:
+            if not clinical_path.is_file():
+                continue
+
+            artifacts = self._collect_linked_artifacts(clinical_path) if delete_artifacts else []
+            clinical_path.unlink()
+            deleted_records.append(clinical_path.name)
+            self._records_index.pop(clinical_path.name, None)
+
+            if delete_artifacts:
+                for artifact_path in artifacts:
+                    if artifact_path.is_file():
+                        artifact_path.unlink()
+                        deleted_artifacts.append(artifact_path.name)
+                        self._dev_runs_index.pop(artifact_path.name, None)
+
+        return {
+            "deleted_records": deleted_records,
+            "deleted_artifacts": deleted_artifacts,
+            "kept_artifacts": not delete_artifacts,
+        }
+
     def list_dev_runs(self, limit: int = 30) -> list[dict[str, Any]]:
         """List available -dev.json telemetry sidecar files sorted newest first."""
         if not self.results_dir.exists():

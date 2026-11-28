@@ -49,6 +49,11 @@ class ToneTestRequest(BaseModel):
     amplitude: float = Field(default=0.2, ge=0.0, le=1.0)
 
 
+class DeleteRecordsRequest(BaseModel):
+    filenames: list[str] = Field(min_length=1, max_length=20)
+    delete_artifacts: bool = True
+
+
 def create_app(
     repo_root: Path = REPO_ROOT,
     binary_path: Path | None = None,
@@ -196,6 +201,54 @@ def create_app(
         if record is None:
             raise HTTPException(status_code=404, detail="Record not found.")
         return record
+
+    def _delete_record_files(filenames: list[str], delete_artifacts: bool) -> dict[str, Any]:
+        sess = session_mgr.state
+        if sess.state == "running":
+            raise HTTPException(status_code=409, detail="Cannot delete records while a screening test is running.")
+
+        if sess.state == "waiting_for_next_ear":
+            active_names = {
+                res.get("filename")
+                for res in (sess.left_result, sess.right_result)
+                if isinstance(res, dict) and res.get("filename")
+            }
+            if any(name in active_names for name in filenames):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Cannot delete an in-progress bilateral session while waiting for the next ear.",
+                )
+
+        try:
+            res = records_mgr.delete_records(filenames, delete_artifacts=delete_artifacts)
+        except InvalidRecordPathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not res["deleted_records"]:
+            raise HTTPException(status_code=404, detail="Record not found.")
+
+        deleted_set = set(res["deleted_records"])
+        if sess.state == "completed":
+            if isinstance(sess.left_result, dict) and sess.left_result.get("filename") in deleted_set:
+                sess.left_result = None
+            if isinstance(sess.right_result, dict) and sess.right_result.get("filename") in deleted_set:
+                sess.right_result = None
+            if sess.left_result is None and sess.right_result is None:
+                sess.state = "idle"
+                sess.session_id = None
+
+        return res
+
+    @app.post("/api/records/delete")
+    async def delete_records_batch(req: DeleteRecordsRequest) -> dict[str, Any]:
+        return _delete_record_files(req.filenames, req.delete_artifacts)
+
+    @app.delete("/api/records/{filename}")
+    async def delete_single_record(
+        filename: str,
+        delete_artifacts: bool = Query(default=True),
+    ) -> dict[str, Any]:
+        return _delete_record_files([filename], delete_artifacts)
 
     @app.post("/api/hardware/verify")
     async def verify_hardware() -> dict[str, Any]:

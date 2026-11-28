@@ -145,6 +145,78 @@ def test_api_conflict_409_and_stop(tmp_path: Path) -> None:
         assert stop_resp.json()["status"] == "aborted"
 
 
+def test_delete_records_api_and_active_session_conflict(tmp_path: Path) -> None:
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    (results_dir / "rec1-left-1000.json").write_text(
+        json.dumps({"patient_id": "del_p1", "ear": "left", "verdict": "Pass", "timestamp_ms": 1000}),
+        encoding="utf-8",
+    )
+    (results_dir / "rec1-left-1000-dev.json").write_text(
+        json.dumps({"patient_id": "del_p1", "ear": "left", "pairs": []}),
+        encoding="utf-8",
+    )
+    (results_dir / "rec1-left-1000-2016.wav").write_bytes(b"RIFF1")
+
+    (results_dir / "rec2-right-2000.json").write_text(
+        json.dumps({"patient_id": "del_p2", "ear": "right", "verdict": "Refer", "timestamp_ms": 2000}),
+        encoding="utf-8",
+    )
+    (results_dir / "rec2-right-2000-dev.json").write_text(
+        json.dumps({"patient_id": "del_p2", "ear": "right", "pairs": []}),
+        encoding="utf-8",
+    )
+    (results_dir / "rec2-right-2000-2016.wav").write_bytes(b"RIFF2")
+
+    slow_bin = tmp_path / "slow_del.py"
+    slow_bin.write_text(
+        f"#!{sys.executable}\n"
+        "import signal, sys, time, json\n"
+        "signal.signal(signal.SIGTERM, lambda s, f: sys.exit(130))\n"
+        "print(json.dumps({'event': 'started', 'total_pairs': 4}), flush=True)\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n",
+        encoding="utf-8",
+    )
+    slow_bin.chmod(0o755)
+
+    app = create_app(
+        repo_root=REPO_ROOT,
+        binary_path=slow_bin,
+        config_path=CONFIG_PATH,
+        results_dir=results_dir,
+        cards_path=tmp_path / "missing_cards",
+    )
+
+    with TestClient(app) as client:
+        # While test is running, deleting must return 409 Conflict
+        assert client.post("/api/test/start", json={"patient_id": "running", "mock": True}).status_code == 200
+        c1 = client.post("/api/records/delete", json={"filenames": ["rec1-left-1000.json"], "delete_artifacts": True})
+        assert c1.status_code == 409
+        assert client.delete("/api/records/rec1-left-1000.json").status_code == 409
+        assert client.post("/api/test/stop").status_code == 200
+
+        # Delete rec1 with delete_artifacts=False -> keeps WAV and -dev.json
+        d1 = client.post("/api/records/delete", json={"filenames": ["rec1-left-1000.json"], "delete_artifacts": False})
+        assert d1.status_code == 200
+        assert d1.json()["deleted_records"] == ["rec1-left-1000.json"]
+        assert d1.json()["deleted_artifacts"] == []
+        assert (results_dir / "rec1-left-1000-2016.wav").is_file()
+        assert (results_dir / "rec1-left-1000-dev.json").is_file()
+
+        # Delete rec2 via DELETE endpoint -> removes clinical JSON, -dev.json, and WAV
+        d2 = client.delete("/api/records/rec2-right-2000.json")
+        assert d2.status_code == 200
+        assert d2.json()["deleted_records"] == ["rec2-right-2000.json"]
+        assert not (results_dir / "rec2-right-2000.json").exists()
+        assert not (results_dir / "rec2-right-2000-dev.json").exists()
+        assert not (results_dir / "rec2-right-2000-2016.wav").exists()
+
+        # Repeating delete returns 404; invalid name returns 400
+        assert client.delete("/api/records/rec2-right-2000.json").status_code == 404
+        assert client.delete("/api/records/bad-dev.json").status_code == 400
+
+
 def test_sse_telemetry_stream_initial_sync_and_disconnect(tmp_path: Path) -> None:
     app = create_app(
         repo_root=REPO_ROOT,

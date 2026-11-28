@@ -150,3 +150,67 @@ def test_list_records_and_dev_runs_mtime_cache_invalidation(tmp_path: Path, monk
 
     rec_path.unlink()
     assert mgr.list_records() == []
+
+
+def test_delete_records_with_and_without_artifacts_and_validation(tmp_path: Path) -> None:
+    # Record 1: delete clinical JSON + linked -dev.json + .wav files
+    _write_record(
+        tmp_path,
+        "p_del-left-1000.json",
+        {
+            "patient_id": "del_01",
+            "ear": "left",
+            "verdict": "Pass",
+            "timestamp_ms": 1000,
+            "dev_telemetry_file": str(tmp_path / "p_del-left-1000-dev.json"),
+        },
+    )
+    _write_record(
+        tmp_path,
+        "p_del-left-1000-dev.json",
+        {
+            "patient_id": "del_01",
+            "ear": "left",
+            "pairs": [{"pair_index": 1, "wav_file": str(tmp_path / "p_del-left-1000-2016.wav")}],
+        },
+    )
+    (tmp_path / "p_del-left-1000-2016.wav").write_bytes(b"RIFFdata")
+
+    # Record 2: delete clinical JSON only, keep WAV and -dev.json
+    _write_record(
+        tmp_path,
+        "p_keep-right-2000.json",
+        {"patient_id": "keep_02", "ear": "right", "verdict": "Refer", "timestamp_ms": 2000},
+    )
+    _write_record(
+        tmp_path,
+        "p_keep-right-2000-dev.json",
+        {"patient_id": "keep_02", "ear": "right", "pairs": []},
+    )
+    (tmp_path / "p_keep-right-2000-2016.wav").write_bytes(b"RIFFkeep")
+
+    mgr = RecordsManager(tmp_path)
+    assert len(mgr.list_records()) == 2
+    assert len(mgr.list_dev_runs()) == 2
+
+    res1 = mgr.delete_records(["p_del-left-1000.json"], delete_artifacts=True)
+    assert res1["deleted_records"] == ["p_del-left-1000.json"]
+    assert set(res1["deleted_artifacts"]) == {"p_del-left-1000-dev.json", "p_del-left-1000-2016.wav"}
+    assert not (tmp_path / "p_del-left-1000.json").exists()
+    assert not (tmp_path / "p_del-left-1000-dev.json").exists()
+    assert not (tmp_path / "p_del-left-1000-2016.wav").exists()
+
+    res2 = mgr.delete_records(["p_keep-right-2000.json"], delete_artifacts=False)
+    assert res2["deleted_records"] == ["p_keep-right-2000.json"]
+    assert res2["deleted_artifacts"] == []
+    assert res2["kept_artifacts"] is True
+    assert not (tmp_path / "p_keep-right-2000.json").exists()
+    assert (tmp_path / "p_keep-right-2000-dev.json").exists()
+    assert (tmp_path / "p_keep-right-2000-2016.wav").exists()
+
+    assert mgr.list_records() == []
+    assert len(mgr.list_dev_runs()) == 1
+
+    for bad in ("../escape.json", "p_keep-right-2000-dev.json", ""):
+        with pytest.raises(InvalidRecordPathError):
+            mgr.delete_records([bad])

@@ -540,6 +540,11 @@ table.data-table {
   align-items: center;
   gap: 1rem;
 }
+.table-actions {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+}
 .filters-bar {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr;

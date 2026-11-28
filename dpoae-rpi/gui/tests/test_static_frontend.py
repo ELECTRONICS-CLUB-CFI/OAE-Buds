@@ -97,3 +97,10 @@ def test_dev_tab_hidden_by_default_and_assets_present() -> None:
     assert "/api/dev/runs" in dev_js
     assert "/api/dev/spectrum/" in dev_js
     assert "/api/dev/wav/" in dev_js
+
+    records_js = (STATIC_DIR / "js" / "records.js").read_text(encoding="utf-8")
+    assert 'id="delete-confirm-modal"' in html
+    assert 'id="delete-keep-artifacts"' in html
+    assert 'id="modal-delete-btn"' in html
+    assert 'id="btn-delete-confirm"' in html
+    assert "/api/records/delete" in records_js

@@ -2,10 +2,12 @@
  * Past Records Browser, Filter Search, Detail Modal, and JSON Export
  */
 
-import { store, notify } from "./store.js";
+import { store, notify, hydrateFromServer } from "./store.js";
 import { buildEarCardHtml, destroyChart, escapeHtml, renderDpGramChart } from "./dpgram_chart.js";
+import { fetchDevRuns } from "./dev.js";
 
 let currentModalRecord = null;
+let pendingDeleteRequest = null;
 let lastRecordsSignature = "";
 
 export async function fetchRecords() {
@@ -74,12 +76,54 @@ async function openRecordModal(group) {
     </p>
   `;
 
-  if (leftFull) html += buildEarCardHtml(leftFull, "modal-chart-left", minReq);
-  if (rightFull) html += buildEarCardHtml(rightFull, "modal-chart-right", minReq);
+  const hasBothEars = Boolean(leftFull && rightFull);
+  if (leftFull) {
+    html += buildEarCardHtml(leftFull, "modal-chart-left", minReq, {
+      deleteFilename: hasBothEars ? ears.left?.filename : null,
+    });
+  }
+  if (rightFull) {
+    html += buildEarCardHtml(rightFull, "modal-chart-right", minReq, {
+      deleteFilename: hasBothEars ? ears.right?.filename : null,
+    });
+  }
   body.innerHTML = html;
 
   if (leftFull) renderDpGramChart("modal-chart-left", leftFull.frequencies, snrThresh);
   if (rightFull) renderDpGramChart("modal-chart-right", rightFull.frequencies, snrThresh);
+}
+
+function getGroupFilenames(group) {
+  const ears = group?.ears || {};
+  return Object.values(ears)
+    .map((e) => e?.filename)
+    .filter(Boolean);
+}
+
+function openDeleteConfirmModal({ title, summaryHtml, filenames, deletedEar = null }) {
+  if (!filenames || !filenames.length) return;
+  pendingDeleteRequest = { filenames, deletedEar };
+
+  const modal = document.getElementById("delete-confirm-modal");
+  const titleEl = document.getElementById("delete-confirm-title");
+  const summaryEl = document.getElementById("delete-confirm-summary");
+  const keepCb = document.getElementById("delete-keep-artifacts");
+  const errEl = document.getElementById("delete-confirm-error");
+  const confirmBtn = document.getElementById("btn-delete-confirm");
+
+  titleEl.textContent = title || "Delete Screening Record?";
+  summaryEl.innerHTML = summaryHtml;
+  keepCb.checked = false;
+  errEl.classList.add("hidden");
+  errEl.textContent = "";
+  confirmBtn.disabled = false;
+  confirmBtn.textContent = "Delete";
+  modal.classList.remove("hidden");
+}
+
+function closeDeleteConfirmModal() {
+  pendingDeleteRequest = null;
+  document.getElementById("delete-confirm-modal").classList.add("hidden");
 }
 
 export function refreshOpenModalCharts() {
@@ -129,7 +173,10 @@ export function renderRecords() {
           <td><span class="badge ${verdictCls}">${escapeHtml(item.overall_verdict)}</span></td>
           <td>${escapeHtml(item.notes || "—")}</td>
           <td>
-            <button type="button" class="btn btn-outline btn-sm btn-view-record" data-idx="${idx}">View</button>
+            <div class="table-actions">
+              <button type="button" class="btn btn-outline btn-sm btn-view-record" data-idx="${idx}">View</button>
+              <button type="button" class="btn btn-danger btn-sm btn-delete-record" data-idx="${idx}">Delete</button>
+            </div>
           </td>
         </tr>
       `;
@@ -158,11 +205,31 @@ export function renderRecords() {
 export function initRecords() {
   // Single delegated click listener instead of rebinding per row on every render
   document.getElementById("records-list").addEventListener("click", (e) => {
-    const btn = e.target.closest(".btn-view-record");
-    if (!btn) return;
-    const idx = Number(btn.dataset.idx);
-    const item = store.records.items[idx];
-    if (item) openRecordModal(item);
+    const viewBtn = e.target.closest(".btn-view-record");
+    if (viewBtn) {
+      const idx = Number(viewBtn.dataset.idx);
+      const item = store.records.items[idx];
+      if (item) openRecordModal(item);
+      return;
+    }
+
+    const delBtn = e.target.closest(".btn-delete-record");
+    if (delBtn) {
+      const idx = Number(delBtn.dataset.idx);
+      const item = store.records.items[idx];
+      if (!item) return;
+      const filenames = getGroupFilenames(item);
+      const earsLabel = item.is_bilateral
+        ? "Bilateral (Left & Right)"
+        : Object.keys(item.ears || {}).map((k) => k.toUpperCase()).join(", ");
+      openDeleteConfirmModal({
+        title: "Delete Screening Session?",
+        summaryHtml: `Delete record for patient <strong>${escapeHtml(item.patient_id)}</strong> (${escapeHtml(
+          earsLabel
+        )}, ${escapeHtml(item.timestamp || "—")})?`,
+        filenames,
+      });
+    }
   });
 
   let searchDebounce = null;
@@ -188,6 +255,7 @@ export function initRecords() {
   const modal = document.getElementById("record-modal");
   const closeModal = () => {
     modal.classList.add("hidden");
+    currentModalRecord = null;
     destroyChart("modal-chart-left");
     destroyChart("modal-chart-right");
   };
@@ -195,8 +263,110 @@ export function initRecords() {
   modal.addEventListener("click", (e) => {
     if (e.target === modal) closeModal();
   });
+
+  document.getElementById("modal-body").addEventListener("click", (e) => {
+    const earDelBtn = e.target.closest(".btn-delete-ear");
+    if (!earDelBtn || !currentModalRecord) return;
+    const filename = earDelBtn.dataset.filename;
+    const ear = earDelBtn.dataset.ear || "";
+    if (!filename) return;
+    openDeleteConfirmModal({
+      title: `Delete ${ear.toUpperCase()} Ear Record?`,
+      summaryHtml: `Delete only the <strong>${escapeHtml(ear.toUpperCase())}</strong> ear result for patient <strong>${escapeHtml(
+        currentModalRecord.patient_id
+      )}</strong>? The other ear in this session will be kept.`,
+      filenames: [filename],
+      deletedEar: ear,
+    });
+  });
+
+  document.getElementById("modal-delete-btn").addEventListener("click", () => {
+    if (!currentModalRecord) return;
+    const filenames = getGroupFilenames(currentModalRecord);
+    const earsLabel = currentModalRecord.is_bilateral
+      ? "Bilateral (Left & Right)"
+      : Object.keys(currentModalRecord.ears || {}).map((k) => k.toUpperCase()).join(", ");
+    openDeleteConfirmModal({
+      title: "Delete Screening Session?",
+      summaryHtml: `Delete session for patient <strong>${escapeHtml(
+        currentModalRecord.patient_id
+      )}</strong> (${escapeHtml(earsLabel)}, ${escapeHtml(currentModalRecord.timestamp || "—")})?`,
+      filenames,
+    });
+  });
+
+  const delConfirmModal = document.getElementById("delete-confirm-modal");
+  document.getElementById("btn-delete-cancel").addEventListener("click", closeDeleteConfirmModal);
+  delConfirmModal.addEventListener("click", (e) => {
+    if (e.target === delConfirmModal) closeDeleteConfirmModal();
+  });
+  document.getElementById("btn-delete-confirm").addEventListener("click", async () => {
+    if (!pendingDeleteRequest) return;
+    const { filenames, deletedEar } = pendingDeleteRequest;
+    const keepArtifacts = Boolean(document.getElementById("delete-keep-artifacts").checked);
+    const errEl = document.getElementById("delete-confirm-error");
+    const confirmBtn = document.getElementById("btn-delete-confirm");
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Deleting...";
+    errEl.classList.add("hidden");
+
+    try {
+      const resp = await fetch("/api/records/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filenames,
+          delete_artifacts: !keepArtifacts,
+        }),
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(body.detail || `Failed to delete record (HTTP ${resp.status})`);
+      }
+
+      const deletedDev = new Set(body.deleted_artifacts || []);
+      const wasModalOpen = !modal.classList.contains("hidden") && currentModalRecord;
+      const modalGroupId = currentModalRecord?.group_id;
+
+      closeDeleteConfirmModal();
+      await fetchRecords();
+      await hydrateFromServer();
+
+      if (store.settings.dev_mode && !keepArtifacts) {
+        if (store.dev.selectedRunFilename && deletedDev.has(store.dev.selectedRunFilename)) {
+          store.dev.selectedRunFilename = null;
+          store.dev.spectrumData = null;
+        }
+        fetchDevRuns();
+      }
+
+      if (wasModalOpen) {
+        if (deletedEar) {
+          const updatedGroup = (store.records.items || []).find((g) => g.group_id === modalGroupId);
+          if (updatedGroup && Object.keys(updatedGroup.ears || {}).length > 0) {
+            await openRecordModal(updatedGroup);
+            return;
+          }
+        }
+        closeModal();
+      }
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.classList.remove("hidden");
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Delete";
+    }
+  });
+
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal();
+    if (e.key === "Escape") {
+      if (!delConfirmModal.classList.contains("hidden")) {
+        closeDeleteConfirmModal();
+      } else if (!modal.classList.contains("hidden")) {
+        closeModal();
+      }
+    }
   });
 
   document.getElementById("modal-print-btn").addEventListener("click", () => {

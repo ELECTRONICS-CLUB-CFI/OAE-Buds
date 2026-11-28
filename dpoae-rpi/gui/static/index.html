@@ -518,6 +518,29 @@
     </div>
   </div>
 
+  <!-- Delete Record Confirmation Modal -->
+  <div id="delete-confirm-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title">
+    <div class="modal-dialog" style="max-width:480px;">
+      <div class="modal-header">
+        <h3 id="delete-confirm-title">Delete Screening Record?</h3>
+      </div>
+      <div class="modal-body">
+        <p id="delete-confirm-summary" style="margin-top:0;"></p>
+        <p class="muted" style="margin-bottom:0.9rem;">By default, the clinical JSON report along with its linked WAV audio recordings and <code>-dev.json</code> telemetry file will be permanently removed.</p>
+        <label class="toggle-switch" style="margin-bottom:0.75rem;">
+          <input type="checkbox" id="delete-keep-artifacts" />
+          <span class="toggle-slider"></span>
+          <span class="toggle-label">Keep raw audio (<code>.wav</code>) and dev telemetry (<code>-dev.json</code>) files</span>
+        </label>
+        <div id="delete-confirm-error" class="alert alert-danger hidden" style="margin-top:0.5rem;"></div>
+        <div class="toolbar-buttons" style="margin-top:1.15rem;justify-content:flex-end;">
+          <button type="button" id="btn-delete-cancel" class="btn btn-outline">Cancel</button>
+          <button type="button" id="btn-delete-confirm" class="btn btn-danger">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Record Detail Modal -->
   <div id="record-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal-dialog">
@@ -526,6 +549,7 @@
         <div class="modal-actions">
           <button type="button" id="modal-print-btn" class="btn btn-outline">Print / Save PDF</button>
           <button type="button" id="modal-download-btn" class="btn btn-outline">Download JSON</button>
+          <button type="button" id="modal-delete-btn" class="btn btn-danger">Delete Session</button>
           <button type="button" id="modal-close-btn" class="btn btn-outline">&times; Close</button>
         </div>
       </div>
